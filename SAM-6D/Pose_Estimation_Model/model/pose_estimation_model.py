@@ -6,18 +6,20 @@ from coarse_point_matching import CoarsePointMatching
 from fine_point_matching import FinePointMatching
 from transformer import GeometricStructureEmbedding
 from model_utils import sample_pts_feats
+import gc
 
 
 class Net(nn.Module):
-    def __init__(self, cfg):
+    def __init__(self, cfg, low_gpu_memory_mode=False):
         super(Net, self).__init__()
         self.cfg = cfg
         self.coarse_npoint = cfg.coarse_npoint
         self.fine_npoint = cfg.fine_npoint
+        self.low_gpu_memory_mode = low_gpu_memory_mode
 
         self.feature_extraction = ViTEncoder(cfg.feature_extraction, self.fine_npoint)
         self.geo_embedding = GeometricStructureEmbedding(cfg.geo_embedding)
-        self.coarse_point_matching = CoarsePointMatching(cfg.coarse_point_matching)
+        self.coarse_point_matching = CoarsePointMatching(cfg.coarse_point_matching, self.low_gpu_memory_mode)
         self.fine_point_matching = FinePointMatching(cfg.fine_point_matching)
 
     def forward(self, end_points):
@@ -35,6 +37,10 @@ class Net(nn.Module):
             dense_po, dense_fo, self.coarse_npoint, return_index=True
         )
         geo_embedding_o = self.geo_embedding(torch.cat([bg_point, sparse_po], dim=1))
+
+        if self.low_gpu_memory_mode:
+            gc.collect()
+            torch.cuda.empty_cache()
 
         # coarse_point_matching
         end_points = self.coarse_point_matching(

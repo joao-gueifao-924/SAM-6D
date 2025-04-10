@@ -12,9 +12,10 @@ from loss_utils import compute_correspondence_loss
 
 
 class CoarsePointMatching(nn.Module):
-    def __init__(self, cfg, return_feat=False):
+    def __init__(self, cfg, low_gpu_memory_mode=False, return_feat=False):
         super(CoarsePointMatching, self).__init__()
         self.cfg = cfg
+        self.low_gpu_memory_mode = low_gpu_memory_mode
         self.return_feat = return_feat
         self.nblock = self.cfg.nblock
 
@@ -71,6 +72,7 @@ class CoarsePointMatching(nn.Module):
                 atten_list[-1], p1, p2,
                 end_points['model'] / (radius.reshape(-1, 1, 1) + 1e-6),
                 self.cfg.nproposal1, self.cfg.nproposal2,
+                self.low_gpu_memory_mode
             )
         end_points['init_R'] = init_R
         end_points['init_t'] = init_t

@@ -3,6 +3,7 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 import numpy as np
+import gc
 
 from pointnet2_utils import (
     gather_operation,
@@ -191,6 +192,7 @@ def compute_coarse_Rt(
     model_pts=None,
     n_proposal1=6000,
     n_proposal2=300,
+    low_gpu_memory_mode=False
 ):
     WSVD = WeightedProcrustes()
 
@@ -237,12 +239,28 @@ def compute_coarse_Rt(
     # pose selection
     transformed_pts = (pts1.unsqueeze(1) - pred_ts) @ pred_rs
     transformed_pts = transformed_pts.reshape(B*n_proposal2, -1, 3)
+
+    if low_gpu_memory_mode:
+        # Move tensors to CPU due to lack of GPU memory
+        transformed_pts = transformed_pts.cpu()
+        expand_model_pts = expand_model_pts.cpu() # Assuming expand_model_pts is also on GPU
+        weights1 = weights1.cpu()
+        pred_rs = pred_rs.cpu()
+        pred_ts = pred_ts.cpu()
+        gc.collect()
+        torch.cuda.empty_cache()
+
     dis = torch.sqrt(pairwise_distance(transformed_pts, expand_model_pts))
     dis = dis.min(2)[0].reshape(B, n_proposal2, -1)
     scores = weights1.unsqueeze(1).sum(2) / ((dis * weights1.unsqueeze(1)).sum(2) + + 1e-8)
     idx = scores.max(1)[1]
     pred_R = torch.gather(pred_rs, 1, idx.reshape(B,1,1,1).repeat(1,1,3,3)).squeeze(1)
     pred_t = torch.gather(pred_ts, 1, idx.reshape(B,1,1,1).repeat(1,1,1,3)).squeeze(2).squeeze(1)
+
+    if low_gpu_memory_mode: # Need to put them back on GPU
+        pred_R = pred_R.cuda()
+        pred_t = pred_t.cuda()
+
     return pred_R, pred_t
 
 
