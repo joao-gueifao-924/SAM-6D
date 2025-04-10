@@ -9,10 +9,10 @@ dependencies:
   - pip
   - python=3.9.6
   - pip:
-    - torch==2.0.0
-    - torchvision==0.15.1
+    - torch==2.3.1 # be careful when updating this version, torchvision and xformers need to also match, including CUDA support
+    - torchvision==0.18.1
     - fvcore
-    - xformers==0.0.18
+    - xformers==0.0.27
     - torchmetrics==0.10.3
     - blenderproc==2.6.1
     - opencv-python 
@@ -25,7 +25,7 @@ dependencies:
     - pandas
     - imageio
     - pyrender
-    - pytorch-lightning==1.8.1
+    - pytorch-lightning==1.8.6 # previous versions are not compatible with pip version >23.x
     - pycocotools 
     - distinctipy
     - git+https://github.com/facebookresearch/segment-anything.git  # SAM
@@ -33,7 +33,7 @@ dependencies:
     # PEM
     - timm
     - gorilla-core==0.2.7.8
-    - trimesh==4.0.8
+    - trimesh==4.4.1
     - gpustat==1.0.0
     - imgaug
     - einops
