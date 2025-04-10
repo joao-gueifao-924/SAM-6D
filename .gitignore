@@ -1,0 +1,9 @@
+.python-version
+**/__pycache__/**
+SAM-6D/Models
+**/outputs/**
+**/build
+**/*.egg-info
+*.pth
+*.pt
+**/dist/**/*.egg
