@@ -91,12 +91,12 @@ def init():
     cfg.log_dir  = log_dir
     cfg.test_iter = args.iter
 
-        cfg.output_dir = args.output_dir
-        cfg.cad_path = args.cad_path
-        cfg.rgb_path = args.rgb_path
-        cfg.depth_path = args.depth_path
-        cfg.cam_path = args.cam_path
-        cfg.seg_path = args.seg_path
+    cfg.output_dir = args.output_dir
+    cfg.cad_path = args.cad_path
+    cfg.rgb_path = args.rgb_path
+    cfg.depth_path = args.depth_path
+    cfg.cam_path = args.cam_path
+    cfg.seg_path = args.seg_path
 
     cfg.low_gpu_memory_mode = args.low_gpu_memory_mode
     cfg.det_score_thresh = args.det_score_thresh
