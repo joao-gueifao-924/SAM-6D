@@ -93,6 +93,8 @@ def batch_input_data(depth_path, cam_path, device):
     return batch
 
 def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh):
+    start_time = time.time()
+
     with initialize(version_base=None, config_path="configs"):
         cfg = compose(config_name='run_inference.yaml')
 
@@ -107,7 +109,15 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
         raise ValueError("The segmentor_model {} is not supported now!".format(segmentor_model))
 
     logging.info("Initializing model")
+    elapsed_time = time.time() - start_time
+    print(f"config time: {elapsed_time:0.3f} seconds")
+
+    start_time = time.time()
     model = instantiate(cfg.model)
+    elapsed_time = time.time() - start_time
+    print(f"model instantiation time: {elapsed_time:0.3f} seconds")
+
+    start_time = time.time()
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.descriptor_model.model = model.descriptor_model.model.to(device)
@@ -120,9 +130,13 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
     else:
         model.segmentor_model.model.setup_model(device=device, verbose=True)
     logging.info(f"Moving models to {device} done!")
-        
+    
+    elapsed_time = time.time() - start_time
+    print(f"model setup time: {elapsed_time:0.3f} seconds")
     
     logging.info("Initializing template")
+    start_time = time.time()
+
     template_dir = os.path.join(output_dir, 'templates')
     num_templates = len(glob.glob(f"{template_dir}/*.npy"))
     boxes, masks, templates = [], [], []
@@ -158,12 +172,24 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
                     templates, masks_cropped[:, 0, :, :]
                 ).unsqueeze(0).data
     
+    elapsed_time = time.time() - start_time
+    print(f"template init time: {elapsed_time:0.3f} seconds")
+    
     # run inference
     rgb = Image.open(rgb_path).convert("RGB")
+    start_time = time.time()
     detections = model.segmentor_model.generate_masks(np.array(rgb))
     detections = Detections(detections)
-    query_decriptors, query_appe_descriptors = model.descriptor_model.forward(np.array(rgb), detections)
 
+    elapsed_time = time.time() - start_time
+    print(f"detections inference time: {elapsed_time:0.3f} seconds")
+
+    start_time = time.time()
+    query_decriptors, query_appe_descriptors = model.descriptor_model.forward(np.array(rgb), detections)
+    elapsed_time = time.time() - start_time
+    print(f"descriptors inference time: {elapsed_time:0.3f} seconds")
+
+    start_time = time.time()
     # matching descriptors
     (
         idx_selected_proposals,
@@ -171,6 +197,10 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
         semantic_score,
         best_template,
     ) = model.compute_semantic_score(query_decriptors)
+    elapsed_time = time.time() - start_time
+    print(f"matching descriptors time: {elapsed_time:0.3f} seconds")
+
+    start_time = time.time()
 
     # update detections
     detections.filter(idx_selected_proposals)
@@ -178,6 +208,7 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
 
     # compute the appearance score
     appe_scores, ref_aux_descriptor= model.compute_appearance_score(best_template, pred_idx_objects, query_appe_descriptors)
+    
 
     # compute the geometric score
     batch = batch_input_data(depth_path, cam_path, device)
@@ -198,6 +229,8 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
 
     # final score
     final_score = (semantic_score + appe_scores + geometric_score*visible_ratio) / (1 + 1 + visible_ratio)
+
+    print(f"rest of inference time: {time.time() - start_time:0.3f} seconds")
 
     detections.add_attribute("scores", final_score)
     detections.add_attribute("object_ids", torch.zeros_like(final_score))   
@@ -221,7 +254,28 @@ if __name__ == "__main__":
     parser.add_argument("--stability_score_thresh", default=0.97, type=float, help="stability_score_thresh of SAM")
     args = parser.parse_args()
     os.makedirs(f"{args.output_dir}/sam6d_results", exist_ok=True)
+
+    DO_DEBUG_SESSION = False
+
+    if DO_DEBUG_SESSION: # Hijack the script arguments
+        ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
+        CAD_PATH = f"{ROOT_DIR}/Data/Example/obj_000005.ply"    # path to a given cad model(mm)
+        RGB_PATH = f"{ROOT_DIR}/Data/Example/rgb.png"           # path to a given RGB image
+        DEPTH_PATH = f"{ROOT_DIR}/Data/Example/depth.png"       # path to a given depth map(mm)
+        CAMERA_PATH = f"{ROOT_DIR}/Data/Example/camera.json"    # path to given camera intrinsics
+        OUTPUT_DIR = f"{ROOT_DIR}/Data/Example/outputs"         # path to a pre-defined file for saving results
+        args.segmentor_model = "fastsam"
+        args.output_dir = OUTPUT_DIR
+        args.cad_path = CAD_PATH
+        args.rgb_path = RGB_PATH
+        args.depth_path =DEPTH_PATH
+        args.cam_path = CAMERA_PATH
+        os.chdir(f"{ROOT_DIR}/Instance_Segmentation_Model")
+
+    start_time = time.time()
     run_inference(
         args.segmentor_model, args.output_dir, args.cad_path, args.rgb_path, args.depth_path, args.cam_path, 
         stability_score_thresh=args.stability_score_thresh,
     )
+    elapsed_time = time.time() - start_time
+    print(f"run_inference() time: {elapsed_time:0.3f} seconds")

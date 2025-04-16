@@ -8,6 +8,7 @@ import numpy as np
 import random
 import importlib
 import json
+import time
 
 import torch
 import torchvision.transforms as transforms
@@ -80,6 +81,26 @@ def get_parser():
 
 def init():
     args = get_parser()
+
+    DO_DEBUG_SESSION = False
+
+    if DO_DEBUG_SESSION: # Hijack the script arguments
+        ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
+        CAD_PATH = f"{ROOT_DIR}/Data/Example/obj_000005.ply"    # path to a given cad model(mm)
+        RGB_PATH = f"{ROOT_DIR}/Data/Example/rgb.png"           # path to a given RGB image
+        DEPTH_PATH = f"{ROOT_DIR}/Data/Example/depth.png"       # path to a given depth map(mm)
+        CAMERA_PATH = f"{ROOT_DIR}/Data/Example/camera.json"    # path to given camera intrinsics
+        OUTPUT_DIR = f"{ROOT_DIR}/Data/Example/outputs"         # path to a pre-defined file for saving results
+        LOW_GPU_MEMORY_MODE = True
+        args.output_dir = OUTPUT_DIR
+        args.cad_path = CAD_PATH
+        args.rgb_path = RGB_PATH
+        args.depth_path =DEPTH_PATH
+        args.cam_path = CAMERA_PATH#
+        args.seg_path = OUTPUT_DIR + "/sam6d_results/detection_ism.json"
+        args.low_gpu_memory_mode = LOW_GPU_MEMORY_MODE
+        os.chdir(f"{ROOT_DIR}/Pose_Estimation_Model")
+
     exp_name = args.model + '_' + \
         osp.splitext(args.config.split("/")[-1])[0] + '_id' + str(args.exp_id)
     log_dir = osp.join("log", exp_name)
@@ -304,6 +325,7 @@ if __name__ == "__main__":
     ninstance = input_data['pts'].size(0)
     
     print("=> running model ...")
+    start_time = time.time()
     with torch.no_grad():
         input_data['dense_po'] = all_tem_pts.repeat(ninstance,1,1)
         input_data['dense_fo'] = all_tem_feat.repeat(ninstance,1,1)
@@ -316,6 +338,8 @@ if __name__ == "__main__":
     pose_scores = pose_scores.detach().cpu().numpy()
     pred_rot = out['pred_R'].detach().cpu().numpy()
     pred_trans = out['pred_t'].detach().cpu().numpy() * 1000
+
+    print(f"inference time: {time.time() - start_time:0.1f} seconds")
 
     print("=> saving results ...")
     os.makedirs(f"{cfg.output_dir}/sam6d_results", exist_ok=True)
