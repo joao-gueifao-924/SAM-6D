@@ -7,7 +7,8 @@ channels:
   - defaults
 dependencies:
   - pip
-  - python=3.9.6
+  #- python=3.9.6
+  - python=3.12
   - pip:
     - torch==2.3.1 # be careful when updating this version, torchvision and xformers need to also match, including CUDA support
     - torchvision==0.18.1
