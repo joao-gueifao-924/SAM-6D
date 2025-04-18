@@ -90,13 +90,14 @@ def init():
         RGB_PATH = f"{ROOT_DIR}/Data/Example/rgb.png"           # path to a given RGB image
         DEPTH_PATH = f"{ROOT_DIR}/Data/Example/depth.png"       # path to a given depth map(mm)
         CAMERA_PATH = f"{ROOT_DIR}/Data/Example/camera.json"    # path to given camera intrinsics
-        OUTPUT_DIR = f"{ROOT_DIR}/Data/Example/outputs"         # path to a pre-defined file for saving results
+        OUTPUT_DIR = f"{ROOT_DIR}/Data/output"         # path to a pre-defined file for saving results
+        TEMPLATE_ROOT_DIR = f"{OUTPUT_DIR}/templates"
         LOW_GPU_MEMORY_MODE = True
         args.output_dir = OUTPUT_DIR
         args.cad_path = CAD_PATH
         args.rgb_path = RGB_PATH
         args.depth_path =DEPTH_PATH
-        args.cam_path = CAMERA_PATH#
+        args.cam_path = CAMERA_PATH
         args.seg_path = OUTPUT_DIR + "/sam6d_results/detection_ism.json"
         args.low_gpu_memory_mode = LOW_GPU_MEMORY_MODE
         os.chdir(f"{ROOT_DIR}/Pose_Estimation_Model")
@@ -113,6 +114,7 @@ def init():
     cfg.test_iter = args.iter
 
     cfg.output_dir = args.output_dir
+    cfg.template_output_dir = TEMPLATE_ROOT_DIR  # TODO fix this
     cfg.cad_path = args.cad_path
     cfg.rgb_path = args.rgb_path
     cfg.depth_path = args.depth_path
@@ -204,124 +206,147 @@ def get_templates(path, cfg):
     return all_tem, all_tem_pts, all_tem_choose
 
 
-def get_test_data(rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_thresh, cfg):
-    dets = []
-    with open(seg_path) as f:
-        dets_ = json.load(f) # keys: scene_id, image_id, category_id, bbox, score, segmentation
-    for det in dets_:
-        if det['score'] > det_score_thresh:
-            dets.append(det)
-    del dets_
+class PoseEstimatorModel:
+    def __init__(self):
+        self.cfg = init()
 
-    cam_info = json.load(open(cam_path))
-    K = np.array(cam_info['cam_K']).reshape(3, 3)
+        random.seed(self.cfg.rd_seed)
+        torch.manual_seed(self.cfg.rd_seed)
 
-    whole_image = load_im(rgb_path).astype(np.uint8)
-    if len(whole_image.shape)==2:
-        whole_image = np.concatenate([whole_image[:,:,None], whole_image[:,:,None], whole_image[:,:,None]], axis=2)
-    whole_depth = load_im(depth_path).astype(np.float32) * cam_info['depth_scale'] / 1000.0
-    whole_pts = get_point_cloud_from_depth(whole_depth, K)
+        # model
+        print("=> creating model ...")
+        MODEL = importlib.import_module(self.cfg.model_name)
+        self.model = MODEL.Net(self.cfg.model, self.cfg.low_gpu_memory_mode)
+        self.model = self.model.cuda()
+        self.model.eval()
+        checkpoint = os.path.join(os.path.dirname((os.path.abspath(__file__))), 'checkpoints', 'sam-6d-pem-base.pth')
+        gorilla.solver.load_checkpoint(model=self.model, filename=checkpoint)
+    
+    def get_templates(self, template_path_for_object, ):
+        all_tem, all_tem_pts, all_tem_choose = get_templates(template_path_for_object, self.cfg.test_dataset)
+        with torch.no_grad():
+            all_tem_pts, all_tem_feat = self.model.feature_extraction.get_obj_feats(all_tem, all_tem_pts, all_tem_choose)
 
-    mesh = trimesh.load_mesh(cad_path)
-    model_points = mesh.sample(cfg.n_sample_model_point).astype(np.float32) / 1000.0
-    radius = np.max(np.linalg.norm(model_points, axis=1))
+        return all_tem_pts, all_tem_feat
+    
+
+    def load_test_data_from_paths(self, rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_thresh, mm_to_meters=True):
+        dets = []
+        with open(seg_path) as f:
+            dets_ = json.load(f) # keys: scene_id, image_id, category_id, bbox, score, segmentation
+        for det in dets_:
+            if det['score'] > det_score_thresh:
+                dets.append(det)
+        del dets_
+
+        cam_info = json.load(open(cam_path))
+        K = np.array(cam_info['cam_K']).reshape(3, 3)
+
+        whole_image = load_im(rgb_path).astype(np.uint8)
+        if len(whole_image.shape)==2:
+            whole_image = np.concatenate([whole_image[:,:,None], whole_image[:,:,None], whole_image[:,:,None]], axis=2)
+
+        scale = 1000.0 if mm_to_meters else 1.0
+
+        whole_depth = load_im(depth_path).astype(np.float32) * cam_info['depth_scale'] / scale
+        whole_pts = get_point_cloud_from_depth(whole_depth, K)
+
+        mesh = trimesh.load_mesh(cad_path)
+        model_points = mesh.sample(self.cfg.test_dataset.n_sample_model_point).astype(np.float32) / scale
+
+        return dets, whole_image, whole_depth, whole_pts, K, model_points
 
 
-    all_rgb = []
-    all_cloud = []
-    all_rgb_choose = []
-    all_score = []
-    all_dets = []
-    for inst in dets:
-        seg = inst['segmentation']
-        score = inst['score']
+    def prepare_test_data(self, dets, whole_image, whole_depth, whole_pts, K, model_points):
+        cfg = self.cfg.test_dataset
+        
+        radius = np.max(np.linalg.norm(model_points, axis=1))
 
-        # mask
-        h,w = seg['size']
-        try:
-            rle = cocomask.frPyObjects(seg, h, w)
-        except:
-            rle = seg
-        mask = cocomask.decode(rle)
-        mask = np.logical_and(mask > 0, whole_depth > 0)
-        if np.sum(mask) > 32:
-            bbox = get_bbox(mask)
-            y1, y2, x1, x2 = bbox
-        else:
-            continue
-        mask = mask[y1:y2, x1:x2]
-        choose = mask.astype(np.float32).flatten().nonzero()[0]
+        all_rgb = []
+        all_cloud = []
+        all_rgb_choose = []
+        all_score = []
+        all_dets = []
+        for inst in dets:
+            seg = inst['segmentation']
+            score = inst['score']
 
-        # pts
-        cloud = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
-        center = np.mean(cloud, axis=0)
-        tmp_cloud = cloud - center[None, :]
-        flag = np.linalg.norm(tmp_cloud, axis=1) < radius * 1.2
-        if np.sum(flag) < 4:
-            continue
-        choose = choose[flag]
-        cloud = cloud[flag]
+            # mask
+            h,w = seg['size']
+            try:
+                rle = cocomask.frPyObjects(seg, h, w)
+            except:
+                rle = seg
+            mask = cocomask.decode(rle)
+            mask = np.logical_and(mask > 0, whole_depth > 0)
+            if np.sum(mask) > 32:
+                bbox = get_bbox(mask)
+                y1, y2, x1, x2 = bbox
+            else:
+                continue
+            mask = mask[y1:y2, x1:x2]
+            choose = mask.astype(np.float32).flatten().nonzero()[0]
 
-        if len(choose) <= cfg.n_sample_observed_point:
-            choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point)
-        else:
-            choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=False)
-        choose = choose[choose_idx]
-        cloud = cloud[choose_idx]
+            # pts
+            cloud = whole_pts.copy()[y1:y2, x1:x2, :].reshape(-1, 3)[choose, :]
+            center = np.mean(cloud, axis=0)
+            tmp_cloud = cloud - center[None, :]
+            flag = np.linalg.norm(tmp_cloud, axis=1) < radius * 1.2
+            if np.sum(flag) < 4:
+                continue
+            choose = choose[flag]
+            cloud = cloud[flag]
 
-        # rgb
-        rgb = whole_image.copy()[y1:y2, x1:x2, :][:,:,::-1]
-        if cfg.rgb_mask_flag:
-            rgb = rgb * (mask[:,:,None]>0).astype(np.uint8)
-        rgb = cv2.resize(rgb, (cfg.img_size, cfg.img_size), interpolation=cv2.INTER_LINEAR)
-        rgb = rgb_transform(np.array(rgb))
-        rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.img_size)
+            if len(choose) <= cfg.n_sample_observed_point:
+                choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point)
+            else:
+                choose_idx = np.random.choice(np.arange(len(choose)), cfg.n_sample_observed_point, replace=False)
+            choose = choose[choose_idx]
+            cloud = cloud[choose_idx]
 
-        all_rgb.append(torch.FloatTensor(rgb))
-        all_cloud.append(torch.FloatTensor(cloud))
-        all_rgb_choose.append(torch.IntTensor(rgb_choose).long())
-        all_score.append(score)
-        all_dets.append(inst)
+            # rgb
+            rgb = whole_image.copy()[y1:y2, x1:x2, :][:,:,::-1]
+            if cfg.rgb_mask_flag:
+                rgb = rgb * (mask[:,:,None]>0).astype(np.uint8)
+            rgb = cv2.resize(rgb, (cfg.img_size, cfg.img_size), interpolation=cv2.INTER_LINEAR)
+            rgb = rgb_transform(np.array(rgb))
+            rgb_choose = get_resize_rgb_choose(choose, [y1, y2, x1, x2], cfg.img_size)
 
-    ret_dict = {}
-    ret_dict['pts'] = torch.stack(all_cloud).cuda()
-    ret_dict['rgb'] = torch.stack(all_rgb).cuda()
-    ret_dict['rgb_choose'] = torch.stack(all_rgb_choose).cuda()
-    ret_dict['score'] = torch.FloatTensor(all_score).cuda()
+            all_rgb.append(torch.FloatTensor(rgb))
+            all_cloud.append(torch.FloatTensor(cloud))
+            all_rgb_choose.append(torch.IntTensor(rgb_choose).long())
+            all_score.append(score)
+            all_dets.append(inst)
 
-    ninstance = ret_dict['pts'].size(0)
-    ret_dict['model'] = torch.FloatTensor(model_points).unsqueeze(0).repeat(ninstance, 1, 1).cuda()
-    ret_dict['K'] = torch.FloatTensor(K).unsqueeze(0).repeat(ninstance, 1, 1).cuda()
-    return ret_dict, whole_image, whole_pts.reshape(-1, 3), model_points, all_dets
+        ret_dict = {}
+        ret_dict['pts'] = torch.stack(all_cloud).cuda()
+        ret_dict['rgb'] = torch.stack(all_rgb).cuda()
+        ret_dict['rgb_choose'] = torch.stack(all_rgb_choose).cuda()
+        ret_dict['score'] = torch.FloatTensor(all_score).cuda()
 
+        ninstance = ret_dict['pts'].size(0)
+        ret_dict['model'] = torch.FloatTensor(model_points).unsqueeze(0).repeat(ninstance, 1, 1).cuda()
+        ret_dict['K'] = torch.FloatTensor(K).unsqueeze(0).repeat(ninstance, 1, 1).cuda()
+        return ret_dict, all_dets
+    
 
 
 if __name__ == "__main__":
-    cfg = init()
-
-    random.seed(cfg.rd_seed)
-    torch.manual_seed(cfg.rd_seed)
-
-    # model
-    print("=> creating model ...")
-    MODEL = importlib.import_module(cfg.model_name)
-    model = MODEL.Net(cfg.model, cfg.low_gpu_memory_mode)
-    model = model.cuda()
-    model.eval()
-    checkpoint = os.path.join(os.path.dirname((os.path.abspath(__file__))), 'checkpoints', 'sam-6d-pem-base.pth')
-    gorilla.solver.load_checkpoint(model=model, filename=checkpoint)
+    pem = PoseEstimatorModel()
 
     print("=> extracting templates ...")
-    tem_path = os.path.join(cfg.output_dir, 'templates')
-    all_tem, all_tem_pts, all_tem_choose = get_templates(tem_path, cfg.test_dataset)
-    with torch.no_grad():
-        all_tem_pts, all_tem_feat = model.feature_extraction.get_obj_feats(all_tem, all_tem_pts, all_tem_choose)
+    all_tem_pts, all_tem_feat = pem.get_templates(pem.cfg.template_output_dir)
 
     print("=> loading input data ...")
-    input_data, img, whole_pts, model_points, detections = get_test_data(
-        cfg.rgb_path, cfg.depth_path, cfg.cam_path, cfg.cad_path, cfg.seg_path, 
-        cfg.det_score_thresh, cfg.test_dataset
-    )
+    
+    cfg = pem.cfg
+
+    dets, whole_image, whole_depth, whole_pts, K, model_points = pem.load_test_data_from_paths(
+                                                                cfg.rgb_path, cfg.depth_path, cfg.cam_path, cfg.cad_path, 
+                                                                cfg.seg_path, cfg.det_score_thresh)
+
+    input_data, detections = pem.prepare_test_data(dets, whole_image, whole_depth, whole_pts, K, model_points)
+
     ninstance = input_data['pts'].size(0)
     
     print("=> running model ...")
@@ -329,7 +354,7 @@ if __name__ == "__main__":
     with torch.no_grad():
         input_data['dense_po'] = all_tem_pts.repeat(ninstance,1,1)
         input_data['dense_fo'] = all_tem_feat.repeat(ninstance,1,1)
-        out = model(input_data)
+        out = pem.model(input_data)
 
     if 'pred_pose_score' in out.keys():
         pose_scores = out['pred_pose_score'] * out['score']
@@ -355,6 +380,6 @@ if __name__ == "__main__":
     save_path = os.path.join(f"{cfg.output_dir}/sam6d_results", 'vis_pem.png')
     valid_masks = pose_scores == pose_scores.max()
     K = input_data['K'].detach().cpu().numpy()[valid_masks]
-    vis_img = visualize(img, pred_rot[valid_masks], pred_trans[valid_masks], model_points*1000, K, save_path)
+    vis_img = visualize(whole_image, pred_rot[valid_masks], pred_trans[valid_masks], model_points*1000, K, save_path)
     vis_img.save(save_path)
 
