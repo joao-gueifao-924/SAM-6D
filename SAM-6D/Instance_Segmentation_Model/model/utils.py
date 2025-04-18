@@ -88,6 +88,13 @@ class Detections:
         for key, value in data.items():
             setattr(self, key, value)
         self.keys = list(data.keys())
+        
+        # This is necessary for when initializing from another Detections instance, 
+        # since it contains its own "keys" attribute, which we must avoid. 
+        # Delete it here:
+        if "keys" in self.keys:
+            self.keys.remove("keys")
+
         if "boxes" in self.keys:
             if isinstance(self.boxes, np.ndarray):
                 self.to_torch()
@@ -189,9 +196,11 @@ class Detections:
         for key in self.keys:
             setattr(self, key, getattr(self, key)[idxs])
 
-    def clone(self):
+    def shallow_copy(self):
         """
-        Clone the current object
+        Shallow-copy the current object. Tensor data referenced by 
+        this Detections instance are shared with the new returned 
+        instance. Be careful.
         """
         return Detections(self.__dict__.copy())
 

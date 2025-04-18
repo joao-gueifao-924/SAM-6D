@@ -1,10 +1,10 @@
-import os, sys
+import os, sys, gc
 import numpy as np
 import shutil
 from tqdm import tqdm
 import time
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import logging
 import os, sys
 import os.path as osp
@@ -42,32 +42,37 @@ inv_rgb_transform = T.Compose(
         ]
     )
 
-def visualize(rgb, detections, save_path="tmp.png"):
+def visualize(rgb, detections, only_best_detection=True, save_path="tmp.png"):
     img = rgb.copy()
     gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
     img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
     colors = distinctipy.get_colors(len(detections))
     alpha = 0.33
 
-    best_score = 0.
+    if only_best_detection:
+        best_score = 0.
+        for mask_idx, det in enumerate(detections):
+            if best_score < det['score']:
+                best_score = det['score']
+                best_det = detections[mask_idx]
+        detections = [best_det]
+
     for mask_idx, det in enumerate(detections):
-        if best_score < det['score']:
-            best_score = det['score']
-            best_det = detections[mask_idx]
+        mask = rle_to_mask(det["segmentation"])
+        edge = canny(mask)
+        edge = binary_dilation(edge, np.ones((2, 2)))
+        obj_id = det["category_id"]
+        temp_id = obj_id - 1
 
-    mask = rle_to_mask(best_det["segmentation"])
-    edge = canny(mask)
-    edge = binary_dilation(edge, np.ones((2, 2)))
-    obj_id = best_det["category_id"]
-    temp_id = obj_id - 1
-
-    r = int(255*colors[temp_id][0])
-    g = int(255*colors[temp_id][1])
-    b = int(255*colors[temp_id][2])
-    img[mask, 0] = alpha*r + (1 - alpha)*img[mask, 0]
-    img[mask, 1] = alpha*g + (1 - alpha)*img[mask, 1]
-    img[mask, 2] = alpha*b + (1 - alpha)*img[mask, 2]   
-    img[edge, :] = 255
+        r = int(255*colors[temp_id][0])
+        g = int(255*colors[temp_id][1])
+        b = int(255*colors[temp_id][2])
+        img[mask, 0] = alpha*r + (1 - alpha)*img[mask, 0]
+        img[mask, 1] = alpha*g + (1 - alpha)*img[mask, 1]
+        img[mask, 2] = alpha*b + (1 - alpha)*img[mask, 2]   
+        img[edge, :] = 255
+        best_score < det['score']
+        
     
     img = Image.fromarray(np.uint8(img))
     img.save(save_path)
@@ -79,6 +84,141 @@ def visualize(rgb, detections, save_path="tmp.png"):
     concat.paste(rgb, (0, 0))
     concat.paste(prediction, (img.shape[1], 0))
     return concat
+
+def visualize_with_score(rgb: Image.Image, detections, only_best_detection=True, save_path="tmp.png"):
+    """
+    Visualizes segmentations on an image, highlighting masks and rendering scores.
+
+    Args:
+        rgb (PIL.Image.Image): The input RGB image.
+        detections (list): A list of detection dictionaries, each containing
+                           'segmentation' (RLE), 'score' (float), 'category_id' (int).
+        only_best_detection (bool): If True, only visualize the detection with the highest score.
+        save_path (str): Path to save the intermediate prediction image.
+
+    Returns:
+        PIL.Image.Image: An image with the original RGB on the left and the
+                         visualized prediction (grayscale background, highlights, scores) on the right.
+    """
+    # 1. Prepare grayscale background image (PIL)
+    # Create a working copy to avoid modifying the original input PIL Image
+    pil_img_for_masks = rgb.copy().convert('L').convert('RGB')
+
+    # 2. Convert PIL image to NumPy array for pixel manipulation
+    # We need the shape for the mask decoder and NumPy for blending/edges
+    img_np = np.array(pil_img_for_masks)
+    img_shape = img_np.shape # (height, width, channels)
+
+    # 3. Handle detections and colors
+    if not detections:
+        print("Warning: No detections provided.")
+        # Return early or handle as needed, e.g., concatenate original with itself or blank
+        concat = Image.new('RGB', (rgb.width * 2, rgb.height))
+        concat.paste(rgb, (0, 0))
+        concat.paste(pil_img_for_masks, (rgb.width, 0)) # Paste grayscale version
+        return concat
+
+    if only_best_detection:
+        best_det = max(detections, key=lambda det: det['score'])
+        detections = [best_det]
+
+    # Use fallback color generator if distinctipy is unavailable or causes issues
+    colors = distinctipy.get_colors(len(detections))
+    #colors = get_distinct_colors(len(detections))
+    alpha = 0.33
+
+    # 4. Prepare for drawing text
+    # We'll store text details and draw them *after* all masks/edges are applied
+    text_to_draw = []
+    font_size = 18 # Adjust as needed
+    try:
+        # Attempt to load a commonly available TrueType font
+        font = ImageFont.truetype("arial.ttf", font_size)
+    except IOError:
+        # Fallback to default bitmap font if arial.ttf is not found
+        font = ImageFont.load_default()
+        font_size = 10 # Default font size is usually smaller
+        print("Arial font not found, using default PIL font.")
+
+    # 5. Process each detection: apply mask, edge, store text info
+    for mask_idx, det in enumerate(detections):
+        # Decode mask - ensuring it has the correct dimensions
+        mask = rle_to_mask(det.get("segmentation")) # Use .get for safety
+
+        # Calculate edge (needs boolean mask)
+        edge = canny(mask)
+        edge = binary_dilation(edge, np.ones((2, 2))) # Adjust dilation kernel if needed
+
+        # Get color components (scaled 0-255)
+        # Use mask_idx if only_best_detection=True, otherwise use category_id logic?
+        # Assuming colors list matches the filtered detections list index
+        temp_id = mask_idx
+        r = int(255 * colors[temp_id][0])
+        g = int(255 * colors[temp_id][1])
+        b = int(255 * colors[temp_id][2])
+
+        # Apply colored mask using alpha blending directly on the NumPy array
+        img_np[mask, 0] = alpha * r + (1 - alpha) * img_np[mask, 0]
+        img_np[mask, 1] = alpha * g + (1 - alpha) * img_np[mask, 1]
+        img_np[mask, 2] = alpha * b + (1 - alpha) * img_np[mask, 2]
+
+        # Apply white edge directly on the NumPy array
+        img_np[edge, :] = 255
+
+        # --- Store Text Information ---
+        score = det['score']
+        text = f"Score: {score:.2f}"
+
+        # Find a position for the text (e.g., top-left corner of mask bounding box)
+        y_indices, x_indices = np.where(mask)
+        if len(x_indices) > 0 and len(y_indices) > 0:
+            min_y, min_x = np.min(y_indices), np.min(x_indices)
+            text_x = min_x
+            # Place text slightly above the mask's top edge
+            text_y = min_y - font_size - 2 # Add a small buffer
+            # Clamp coordinates to be within image bounds
+            text_x = max(0, min(text_x, img_shape[1] - 10)) # Prevent going off right edge
+            text_y = max(0, min(text_y, img_shape[0] - 10)) # Prevent going off bottom edge
+        else:
+            # Default position if mask is empty or not found (e.g., top-left corner)
+            text_x, text_y = 10, 10 + mask_idx * (font_size + 5) # Stagger if multiple fallbacks
+
+        # Store details: position, text, color (e.g., yellow), font
+        text_to_draw.append(((text_x, text_y), text, (255, 255, 0), font))
+        # --- End Store Text Information ---
+
+    # 6. Convert the final NumPy array back to a PIL Image
+    prediction_pil = Image.fromarray(img_np)
+
+    # 7. Draw all the stored text items onto the prediction PIL image
+    draw = ImageDraw.Draw(prediction_pil)
+    for position, text, color, text_font in text_to_draw:
+        # Draw a small black rectangle behind the text for better visibility
+        bbox = text_font.getbbox(text)
+        # bbox is (left, top, right, bottom)
+        # Width = right - left
+        text_width = bbox[2] - bbox[0]
+        # Height = bottom - top (pixel height of the ink)
+        text_height = bbox[3] - bbox[1]
+
+        bg_coords = [
+            (position[0] - 1, position[1] - 1),
+            (position[0] + text_width + 1, position[1] + text_height + 1)
+        ]
+        draw.rectangle(bg_coords, fill=(0, 0, 0)) # Black background rectangle
+        draw.text(position, text, fill=color, font=text_font)
+
+    # 8. Save the prediction image (optional, as per original code)
+    prediction_pil.save(save_path)
+    # prediction = Image.open(save_path) # No need to reload, we have prediction_pil
+
+    # 9. Concatenate original RGB and final prediction side-by-side
+    concat = Image.new('RGB', (rgb.width + prediction_pil.width, rgb.height))
+    concat.paste(rgb, (0, 0)) # Paste original PIL image
+    concat.paste(prediction_pil, (rgb.width, 0)) # Paste final prediction PIL image
+
+    return concat
+
 
 def batch_input_data(depth_path, cam_path, device):
     batch = {}
@@ -92,48 +232,96 @@ def batch_input_data(depth_path, cam_path, device):
     batch['depth_scale'] = torch.from_numpy(depth_scale).unsqueeze(0).to(device)
     return batch
 
-def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh):
+
+def infer_on_image(rgb_image, model):
+    # run inference
     start_time = time.time()
-
-    with initialize(version_base=None, config_path="configs"):
-        cfg = compose(config_name='run_inference.yaml')
-
-    if segmentor_model == "sam":
-        with initialize(version_base=None, config_path="configs/model"):
-            cfg.model = compose(config_name='ISM_sam.yaml')
-        cfg.model.segmentor_model.stability_score_thresh = stability_score_thresh
-    elif segmentor_model == "fastsam":
-        with initialize(version_base=None, config_path="configs/model"):
-            cfg.model = compose(config_name='ISM_fastsam.yaml')
-    else:
-        raise ValueError("The segmentor_model {} is not supported now!".format(segmentor_model))
-
-    logging.info("Initializing model")
-    elapsed_time = time.time() - start_time
-    print(f"config time: {elapsed_time:0.3f} seconds")
+    detections = model.segmentor_model.generate_masks(rgb_image)
+    detections = Detections(detections)
+    logging.info(f"detections inference time: {time.time() - start_time:0.3f} seconds")
 
     start_time = time.time()
-    model = instantiate(cfg.model)
-    elapsed_time = time.time() - start_time
-    print(f"model instantiation time: {elapsed_time:0.3f} seconds")
+    query_decriptors, query_appe_descriptors = model.descriptor_model.forward(rgb_image, detections)
+    logging.info(f"descriptors inference time: {time.time() - start_time:0.3f} seconds")
+
+    return detections, query_decriptors, query_appe_descriptors
+
+
+def run_inference(model, device, low_gpu_mem_mode, output_dir, cad_model, rgb_image, all_image_detections, query_decriptors, query_appe_descriptors, depth_image, cam_K, depth_scale, min_detection_final_score):
+    start_time = time.time()
+    # matching descriptors
+    (
+        idx_selected_proposals,
+        pred_idx_objects,
+        semantic_score,
+        best_template,
+    ) = model.compute_semantic_score(query_decriptors)
+    print(f"matching descriptors time: {time.time() - start_time:0.3f} seconds")
 
     start_time = time.time()
+
+    # update detections
+    # Make a shallow copy so that we don't drop proposals from all_image_detections
+    # that don't match with the given set of descriptors
+    detections = all_image_detections.shallow_copy()
+    detections.filter(idx_selected_proposals)
+    query_appe_descriptors = query_appe_descriptors[idx_selected_proposals, :]
+
+    # compute the appearance score
+    appe_scores, ref_aux_descriptor= model.compute_appearance_score(best_template, pred_idx_objects, query_appe_descriptors)
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model.descriptor_model.model = model.descriptor_model.model.to(device)
-    model.descriptor_model.model.device = device
-    # if there is predictor in the model, move it to device
-    if hasattr(model.segmentor_model, "predictor"):
-        model.segmentor_model.predictor.model = (
-            model.segmentor_model.predictor.model.to(device)
+
+    # compute the geometric score
+    batch = {
+        "depth": torch.from_numpy(depth_image).unsqueeze(0).to(device),
+        "cam_intrinsic": torch.from_numpy(cam_K).unsqueeze(0).to(device),
+        "depth_scale": torch.from_numpy(np.array(depth_scale)).unsqueeze(0).to(device),
+    }
+    template_poses = get_obj_poses_from_template_level(level=2, pose_distribution="all")
+    template_poses[:, :3, 3] *= 0.4
+    poses = torch.tensor(template_poses).to(torch.float32).to(device)
+    model.ref_data["poses"] =  poses[load_index_level_in_level2(0, "all"), :, :]
+
+    model_points = cad_model.sample(2048).astype(np.float32) # / 1000.0 cad model is already provided in meters by IpdReader
+    model.ref_data["pointcloud"] = torch.tensor(model_points).unsqueeze(0).data.to(device)
+    
+    if low_gpu_mem_mode:
+        gc.collect()
+        torch.cuda.empty_cache()
+
+    image_uv = model.project_template_to_image(best_template, pred_idx_objects, batch, detections.masks)
+
+    geometric_score, visible_ratio = model.compute_geometric_score(
+        image_uv, detections, query_appe_descriptors, ref_aux_descriptor, visible_thred=model.visible_thred
         )
-    else:
-        model.segmentor_model.model.setup_model(device=device, verbose=True)
-    logging.info(f"Moving models to {device} done!")
-    
-    elapsed_time = time.time() - start_time
-    print(f"model setup time: {elapsed_time:0.3f} seconds")
-    
+
+    # final score
+    final_score = (semantic_score + appe_scores + geometric_score*visible_ratio) / (1 + 1 + visible_ratio)
+
+    print(f"rest of inference time: {time.time() - start_time:0.3f} seconds")
+
+    detections.add_attribute("scores", final_score)
+    detections.add_attribute("object_ids", torch.zeros_like(final_score))
+
+    # Discard all detections with low score:
+    mask = detections.scores >= min_detection_final_score
+    indices = torch.nonzero(mask).flatten()
+    detections.filter(indices)
+
+    return detections
+
+
+def save_output(output_dir, rgb_image, detections, only_best_detection=True):
+    detections.to_numpy()
+    save_path = f"{output_dir}/sam6d_results/detection_ism"
+    os.makedirs(save_path, exist_ok=False)
+    detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
+    detections = convert_npz_to_json(idx=0, list_npz_paths=[save_path+".npz"])
+    save_json_bop23(save_path+".json", detections)
+    vis_img = visualize_with_score(Image.fromarray(rgb_image).convert("RGB"), detections, only_best_detection, f"{output_dir}/sam6d_results/vis_ism.png")
+    vis_img.save(f"{output_dir}/sam6d_results/vis_ism.png")
+
+def init_templates(output_dir, model, device):
     logging.info("Initializing template")
     start_time = time.time()
 
@@ -164,7 +352,7 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
     templates = proposal_processor(images=templates, boxes=boxes).to(device)
     masks_cropped = proposal_processor(images=masks, boxes=boxes).to(device)
 
-    model.ref_data = {}
+    clear_ref_data(model)
     model.ref_data["descriptors"] = model.descriptor_model.compute_features(
                     templates, token_name="x_norm_clstoken"
                 ).unsqueeze(0).data
@@ -173,76 +361,91 @@ def run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, c
                 ).unsqueeze(0).data
     
     elapsed_time = time.time() - start_time
-    print(f"template init time: {elapsed_time:0.3f} seconds")
-    
-    # run inference
-    rgb = Image.open(rgb_path).convert("RGB")
-    start_time = time.time()
-    detections = model.segmentor_model.generate_masks(np.array(rgb))
-    detections = Detections(detections)
+    logging.info(f"template init time: {elapsed_time:0.3f} seconds")
 
+def clear_ref_data(model):
+    model.ref_data = {}
+
+def load_model(segmentor_model, stability_score_thresh):
+    start_time = time.time()
+
+    with initialize(version_base=None, config_path="configs"):
+        cfg = compose(config_name='run_inference.yaml')
+
+    if segmentor_model == "sam":
+        with initialize(version_base=None, config_path="configs/model"):
+            cfg.model = compose(config_name='ISM_sam.yaml')
+        cfg.model.segmentor_model.stability_score_thresh = stability_score_thresh
+    elif segmentor_model == "fastsam":
+        with initialize(version_base=None, config_path="configs/model"):
+            cfg.model = compose(config_name='ISM_fastsam.yaml')
+    else:
+        raise ValueError("The segmentor_model {} is not supported now!".format(segmentor_model))
+
+    logging.info("Initializing model")
     elapsed_time = time.time() - start_time
-    print(f"detections inference time: {elapsed_time:0.3f} seconds")
+    logging.info(f"config time: {elapsed_time:0.3f} seconds")
 
     start_time = time.time()
-    query_decriptors, query_appe_descriptors = model.descriptor_model.forward(np.array(rgb), detections)
+    model = instantiate(cfg.model)
     elapsed_time = time.time() - start_time
-    print(f"descriptors inference time: {elapsed_time:0.3f} seconds")
+    logging.info(f"model instantiation time: {elapsed_time:0.3f} seconds")
 
     start_time = time.time()
-    # matching descriptors
-    (
-        idx_selected_proposals,
-        pred_idx_objects,
-        semantic_score,
-        best_template,
-    ) = model.compute_semantic_score(query_decriptors)
-    elapsed_time = time.time() - start_time
-    print(f"matching descriptors time: {elapsed_time:0.3f} seconds")
-
-    start_time = time.time()
-
-    # update detections
-    detections.filter(idx_selected_proposals)
-    query_appe_descriptors = query_appe_descriptors[idx_selected_proposals, :]
-
-    # compute the appearance score
-    appe_scores, ref_aux_descriptor= model.compute_appearance_score(best_template, pred_idx_objects, query_appe_descriptors)
     
-
-    # compute the geometric score
-    batch = batch_input_data(depth_path, cam_path, device)
-    template_poses = get_obj_poses_from_template_level(level=2, pose_distribution="all")
-    template_poses[:, :3, 3] *= 0.4
-    poses = torch.tensor(template_poses).to(torch.float32).to(device)
-    model.ref_data["poses"] =  poses[load_index_level_in_level2(0, "all"), :, :]
-
-    mesh = trimesh.load_mesh(cad_path)
-    model_points = mesh.sample(2048).astype(np.float32) / 1000.0
-    model.ref_data["pointcloud"] = torch.tensor(model_points).unsqueeze(0).data.to(device)
-    
-    image_uv = model.project_template_to_image(best_template, pred_idx_objects, batch, detections.masks)
-
-    geometric_score, visible_ratio = model.compute_geometric_score(
-        image_uv, detections, query_appe_descriptors, ref_aux_descriptor, visible_thred=model.visible_thred
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model.descriptor_model.model = model.descriptor_model.model.to(device)
+    model.descriptor_model.model.device = device
+    # if there is predictor in the model, move it to device
+    if hasattr(model.segmentor_model, "predictor"):
+        model.segmentor_model.predictor.model = (
+            model.segmentor_model.predictor.model.to(device)
         )
-
-    # final score
-    final_score = (semantic_score + appe_scores + geometric_score*visible_ratio) / (1 + 1 + visible_ratio)
-
-    print(f"rest of inference time: {time.time() - start_time:0.3f} seconds")
-
-    detections.add_attribute("scores", final_score)
-    detections.add_attribute("object_ids", torch.zeros_like(final_score))   
-         
-    detections.to_numpy()
-    save_path = f"{output_dir}/sam6d_results/detection_ism"
-    detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
-    detections = convert_npz_to_json(idx=0, list_npz_paths=[save_path+".npz"])
-    save_json_bop23(save_path+".json", detections)
-    vis_img = visualize(rgb, detections, f"{output_dir}/sam6d_results/vis_ism.png")
-    vis_img.save(f"{output_dir}/sam6d_results/vis_ism.png")
+    else:
+        model.segmentor_model.model.setup_model(device=device, verbose=True)
+    logging.info(f"Moving models to {device} done!")
     
+    elapsed_time = time.time() - start_time
+    logging.info(f"model setup time: {elapsed_time:0.3f} seconds")
+    return model, device
+
+def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh):
+    """
+    Load the CAD model, RGB image, depth image, and camera information, 
+    and call the run_inference function with the loaded data.
+    """
+    # Load CAD model
+    cad_model = trimesh.load(cad_path)
+
+    # Load RGB image as a NumPy array
+    rgb_image = np.array(Image.open(rgb_path).convert("RGB"))
+
+    # Load depth image as a NumPy array
+    depth_image = np.array(imageio.imread(depth_path)).astype(np.int32)
+
+    # Load camera information
+    cam_info = load_json(cam_path)
+
+    cam_K = np.array(cam_info['cam_K']).reshape((3, 3))
+    depth_scale = cam_info['depth_scale']
+
+    model, device = load_model(segmentor_model, stability_score_thresh)
+    init_templates(output_dir, model, device)
+
+    # Call the existing run_inference function
+    run_inference(
+        model,
+        device,
+        output_dir=output_dir,
+        cad_model=cad_model,
+        rgb_image=rgb_image,
+        depth_image=depth_image,
+        cam_K=cam_K,
+        depth_scale=depth_scale,
+        stability_score_thresh=stability_score_thresh,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--segmentor_model", default='sam', help="The segmentor model in ISM")
@@ -255,27 +458,34 @@ if __name__ == "__main__":
     args = parser.parse_args()
     os.makedirs(f"{args.output_dir}/sam6d_results", exist_ok=True)
 
-    DO_DEBUG_SESSION = False
+    DO_DEBUG_SESSION = True
 
-    if DO_DEBUG_SESSION: # Hijack the script arguments
+    if DO_DEBUG_SESSION:  # Hijack the script arguments
         ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
         CAD_PATH = f"{ROOT_DIR}/Data/Example/obj_000005.ply"    # path to a given cad model(mm)
         RGB_PATH = f"{ROOT_DIR}/Data/Example/rgb.png"           # path to a given RGB image
         DEPTH_PATH = f"{ROOT_DIR}/Data/Example/depth.png"       # path to a given depth map(mm)
         CAMERA_PATH = f"{ROOT_DIR}/Data/Example/camera.json"    # path to given camera intrinsics
-        OUTPUT_DIR = f"{ROOT_DIR}/Data/Example/outputs"         # path to a pre-defined file for saving results
+        #OUTPUT_DIR = f"{ROOT_DIR}/Data/Example/outputs"         # path to a pre-defined file for saving results
+        OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"
         args.segmentor_model = "fastsam"
         args.output_dir = OUTPUT_DIR
         args.cad_path = CAD_PATH
         args.rgb_path = RGB_PATH
-        args.depth_path =DEPTH_PATH
+        args.depth_path = DEPTH_PATH
         args.cam_path = CAMERA_PATH
         os.chdir(f"{ROOT_DIR}/Instance_Segmentation_Model")
 
     start_time = time.time()
-    run_inference(
-        args.segmentor_model, args.output_dir, args.cad_path, args.rgb_path, args.depth_path, args.cam_path, 
+    load_and_run_inference(
+        segmentor_model=args.segmentor_model,
+        output_dir=args.output_dir,
+        cad_path=args.cad_path,
+        rgb_path=args.rgb_path,
+        depth_path=args.depth_path,
+        cam_path=args.cam_path,
         stability_score_thresh=args.stability_score_thresh,
     )
     elapsed_time = time.time() - start_time
-    print(f"run_inference() time: {elapsed_time:0.3f} seconds")
+    print(f"load_and_run_inference() time: {elapsed_time:0.3f} seconds")
+    
