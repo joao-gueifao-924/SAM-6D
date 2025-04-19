@@ -4,6 +4,8 @@ import torch.nn.functional as F
 
 import numpy as np
 
+import gc
+
 from typing import Union, Dict, Optional, Tuple
 from einops import rearrange
 
@@ -264,7 +266,7 @@ class SinusoidalPositionalEmbedding(nn.Module):
         div_term = torch.exp(div_indices * (-np.log(10000.0) / d_model))
         self.register_buffer('div_term', div_term)
 
-    def forward(self, emb_indices):
+    def forward(self, emb_indices, chunk_size=1024*100):
         r"""Sinusoidal Positional Embedding.
 
         Args:
@@ -274,12 +276,73 @@ class SinusoidalPositionalEmbedding(nn.Module):
             embeddings: torch.Tensor (*, D)
         """
         input_shape = emb_indices.shape
-        omegas = emb_indices.view(-1, 1, 1) * self.div_term.view(1, -1, 1)  # (-1, d_model/2, 1)
-        sin_embeddings = torch.sin(omegas)
-        cos_embeddings = torch.cos(omegas)
-        embeddings = torch.cat([sin_embeddings, cos_embeddings], dim=2)  # (-1, d_model/2, 2)
-        embeddings = embeddings.view(*input_shape, self.d_model)  # (*, d_model)
-        embeddings = embeddings.detach()
+
+        if chunk_size == 1:
+            omegas = emb_indices.view(-1, 1, 1) * self.div_term.view(1, -1, 1)  # (-1, d_model/2, 1)
+            sin_embeddings = torch.sin(omegas)
+            cos_embeddings = torch.cos(omegas)
+            embeddings = torch.cat([sin_embeddings, cos_embeddings], dim=2)  # (-1, d_model/2, 2)
+        else:
+            pass
+            gc.collect()
+            torch.cuda.empty_cache()
+            emb_indices_flat = emb_indices.view(-1)
+            n_elements = emb_indices_flat.shape[0]
+
+            emb_indices.dtype
+            embeddings = torch.empty(n_elements, self.d_model, dtype=emb_indices.dtype, device=torch.device("cuda"))
+
+            # Process in chunks
+            for i in range(0, n_elements, chunk_size):
+                start_idx = i
+                # Calculate actual end index, respecting tensor bounds
+                end_idx = min(i + chunk_size, n_elements)
+                current_chunk_size = end_idx - start_idx
+
+                # Get the chunk of indices (already on GPU)
+                chunk_indices = emb_indices_flat[start_idx : end_idx]
+
+                # --- Perform calculations for the chunk ---
+                # Unsqueeze for broadcasting, ensure float type
+                # Calculation on GPU: (current_chunk_size, 1, 1) * (1, d_model/2, 1) -> (current_chunk_size, d_model/2, 1)
+                omegas_chunk = chunk_indices.view(-1, 1, 1).to(emb_indices.dtype) * self.div_term.view(1, -1, 1)
+
+                # *** Decide whether to use CPU for sin/cos ***
+                # Option A: Keep on GPU (simpler, faster if fits, less CPU RAM used)
+                sin_embeddings_chunk = torch.sin(omegas_chunk)
+                cos_embeddings_chunk = torch.cos(omegas_chunk)
+                
+                # Option B: Move to CPU to save GPU RAM during sin/cos (if Option A fails)
+                # omegas_chunk_cpu = omegas_chunk.cpu()
+                # # Free GPU memory used by omegas_chunk *before* sin/cos if extremely tight
+                # del omegas_chunk
+                # torch.cuda.empty_cache() # Use very sparingly
+                # sin_embeddings_chunk = torch.sin(omegas_chunk_cpu)
+                # cos_embeddings_chunk = torch.cos(omegas_chunk_cpu)
+                # # Note: embeddings_chunk will be on CPU now
+
+                # Concatenate sin and cos
+                # Shape: (current_chunk_size, d_model/2, 2)
+                embeddings_chunk = torch.cat([sin_embeddings_chunk, cos_embeddings_chunk], dim=2)
+
+                # Reshape the chunk to (current_chunk_size, d_model)
+                embeddings_chunk = embeddings_chunk.view(current_chunk_size, self.d_model)
+
+                # --- Place the computed chunk into the pre-allocated tensor ---
+                # Move chunk back to GPU if it was computed on CPU (Option B)
+                # Assign directly into the slice of the pre-allocated flat tensor
+                embeddings[start_idx : end_idx] = embeddings_chunk.to(torch.device("cuda"), non_blocking=True)
+                # ------------------------------------------------------------
+
+                # Cleanup inside the loop (usually not needed with pre-allocation,
+                # unless intermediate steps like omegas_chunk are huge even for a chunk)
+                # del chunk_indices, omegas_chunk, sin_embeddings_chunk, cos_embeddings_chunk, embeddings_chunk
+                # If using Option B with CPU: del omegas_chunk_cpu
+                # gc.collect() # Avoid frequent GC/cache clearing inside loop - severe performance hit
+                # torch.cuda.empty_cache() # Avoid frequent GC/cache clearing inside loop
+
+            embeddings = embeddings.view(*input_shape, self.d_model)  # (*, d_model)
+            embeddings = embeddings.detach()
         return embeddings
 
 

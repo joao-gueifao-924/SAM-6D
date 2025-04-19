@@ -82,7 +82,7 @@ def get_parser():
 def init():
     args = get_parser()
 
-    DO_DEBUG_SESSION = False
+    DO_DEBUG_SESSION = True
 
     if DO_DEBUG_SESSION: # Hijack the script arguments
         ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
@@ -143,8 +143,8 @@ rgb_transform = transforms.Compose([transforms.ToTensor(),
                                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                                     std=[0.229, 0.224, 0.225])])
 
-def visualize(rgb, pred_rot, pred_trans, model_points, K, save_path):
-    img = draw_detections(rgb, pred_rot, pred_trans, model_points, K, color=(255, 0, 0))
+def visualize(rgb, pred_rot, pred_trans, pose_scores, model_points, K, save_path):
+    img = draw_detections(rgb, pred_rot, pred_trans, pose_scores, model_points, K, color=(255, 0, 0))
     img = Image.fromarray(np.uint8(img))
     img.save(save_path)
     prediction = Image.open(save_path)
@@ -217,18 +217,38 @@ class PoseEstimatorModel:
         print("=> creating model ...")
         MODEL = importlib.import_module(self.cfg.model_name)
         self.model = MODEL.Net(self.cfg.model, self.cfg.low_gpu_memory_mode)
-        self.model = self.model.cuda()
+        
+        if self.cfg.low_gpu_memory_mode:
+            self.model = self.model.cpu()
+        else:
+            self.model = self.model.cuda()
+
         self.model.eval()
         checkpoint = os.path.join(os.path.dirname((os.path.abspath(__file__))), 'checkpoints', 'sam-6d-pem-base.pth')
         gorilla.solver.load_checkpoint(model=self.model, filename=checkpoint)
+
+
+    def load_model_to_gpu(self):
+        if not next(self.model.parameters()).is_cuda:
+            self.model = self.model.cuda()
+
+
+    def unload_model_to_cpu(self):
+        if next(self.model.parameters()).is_cuda:
+            self.model = self.model.cpu()
     
+
     def get_templates(self, template_path_for_object, ):
         all_tem, all_tem_pts, all_tem_choose = get_templates(template_path_for_object, self.cfg.test_dataset)
         with torch.no_grad():
             all_tem_pts, all_tem_feat = self.model.feature_extraction.get_obj_feats(all_tem, all_tem_pts, all_tem_choose)
 
         return all_tem_pts, all_tem_feat
-    
+
+
+    def get_point_cloud_from_depth(self, whole_depth, K):
+        return get_point_cloud_from_depth(whole_depth, K)
+
 
     def load_test_data_from_paths(self, rgb_path, depth_path, cam_path, cad_path, seg_path, det_score_thresh, mm_to_meters=True):
         dets = []
@@ -249,12 +269,17 @@ class PoseEstimatorModel:
         scale = 1000.0 if mm_to_meters else 1.0
 
         whole_depth = load_im(depth_path).astype(np.float32) * cam_info['depth_scale'] / scale
-        whole_pts = get_point_cloud_from_depth(whole_depth, K)
+        whole_pts = self.get_point_cloud_from_depth(whole_depth, K)
 
         mesh = trimesh.load_mesh(cad_path)
-        model_points = mesh.sample(self.cfg.test_dataset.n_sample_model_point).astype(np.float32) / scale
+        model_points = self.sample_points_from_mesh(mesh) / scale
 
         return dets, whole_image, whole_depth, whole_pts, K, model_points
+
+
+    def sample_points_from_mesh(self, mesh):
+        model_points = mesh.sample(self.cfg.test_dataset.n_sample_model_point).astype(np.float32)
+        return model_points
 
 
     def prepare_test_data(self, dets, whole_image, whole_depth, whole_pts, K, model_points):
@@ -268,16 +293,34 @@ class PoseEstimatorModel:
         all_score = []
         all_dets = []
         for inst in dets:
-            seg = inst['segmentation']
-            score = inst['score']
-
-            # mask
-            h,w = seg['size']
+            
+            # Compatible with both 'scores' and 'score' keys
+            # Reason: We may be passing dets coming from either: 
+            #   - in-memory detections created by InstanceSegmentatorModel
+            #   - loading Detections from file, which have different set of attributes altogether.
+            score = inst.get('scores', inst.get('score')) # Get 'scores', fallback to 'score'
+        
+            # Prefer the masks already in memory produced by Instance Segmentation Model stage.
+            # Only load masks from file otherwise.
             try:
-                rle = cocomask.frPyObjects(seg, h, w)
-            except:
-                rle = seg
-            mask = cocomask.decode(rle)
+                inst["masks"].shape
+                masks_already_in_memory = True
+            except KeyError:
+                masks_already_in_memory = False
+
+            if masks_already_in_memory:
+                mask = inst["masks"].cpu().numpy()
+            else: # need to decode RLE streams
+                seg = inst['segmentation']
+
+                # mask
+                h,w = seg['size']
+                try:
+                    rle = cocomask.frPyObjects(seg, h, w)
+                except:
+                    rle = seg
+                mask = cocomask.decode(rle)
+            
             mask = np.logical_and(mask > 0, whole_depth > 0)
             if np.sum(mask) > 32:
                 bbox = get_bbox(mask)
@@ -330,6 +373,64 @@ class PoseEstimatorModel:
         return ret_dict, all_dets
     
 
+    def infer_pose(self, all_tem_pts, all_tem_feat, input_data, chunk_size=5):
+        ninstance = input_data['pts'].size(0)
+
+        # Lists to store results from each chunk before concatenation
+        all_pose_scores_list = []
+        all_pred_rot_list = []
+        all_pred_trans_list = []
+
+        print("=> running model ...")
+        with torch.inference_mode():
+            for i in range(0, ninstance, chunk_size):
+                start_idx = i
+                end_idx = min(i + chunk_size, ninstance)
+                current_chunk_size = end_idx - start_idx
+
+                # Create a dictionary for the current chunk's data
+                chunk_input_data = {}
+                for key, value in input_data.items():
+                    # Slice tensors that have the batch dimension (ninstance)
+                    #if isinstance(value, torch.Tensor) and value.size(0) == ninstance:
+                    chunk_input_data[key] = value[start_idx:end_idx]
+
+                chunk_input_data['dense_po'] = all_tem_pts.repeat(current_chunk_size, 1, 1)
+                chunk_input_data['dense_fo'] = all_tem_feat.repeat(current_chunk_size, 1, 1)
+
+                #with torch.autocast(device_type='cuda', dtype=torch.float16):
+                out_chunk = self.model(chunk_input_data)
+
+                # Process output chunk
+                if 'pred_pose_score' in out_chunk.keys():
+                    pose_scores_chunk = out_chunk['pred_pose_score'] * out_chunk['score']
+                else:
+                    pose_scores_chunk = out_chunk['score']
+                
+                # Detach and move results to CPU incrementally to free GPU memory
+                all_pose_scores_list.append(pose_scores_chunk.detach().cpu())
+                all_pred_rot_list.append(out_chunk['pred_R'].detach().cpu())
+                all_pred_trans_list.append(out_chunk['pred_t'].detach().cpu())
+
+            pose_scores = torch.cat(all_pose_scores_list, dim=0).numpy()
+            pred_rot = torch.cat(all_pred_rot_list, dim=0).numpy()
+            pred_trans = torch.cat(all_pred_trans_list, dim=0).numpy()
+
+        return pose_scores,pred_rot,pred_trans
+
+
+    def render_predictions(self, whole_image, model_points, input_data, pose_scores, pred_rot, pred_trans, save_path, only_highest_score = True, min_score_threshold=0.3, meters2mm=True):
+        
+        if only_highest_score:
+            valid_masks = pose_scores == pose_scores.max() and pose_scores >= min_score_threshold
+        else:
+            valid_masks = pose_scores >= min_score_threshold
+        
+        scale = 1000.0 if meters2mm else 1.0
+        K = input_data['K'].detach().cpu().numpy()[valid_masks]
+        vis_img = visualize(whole_image, pred_rot[valid_masks], pred_trans[valid_masks], pose_scores[valid_masks], model_points*scale, K, save_path)
+        vis_img.save(save_path)
+
 
 if __name__ == "__main__":
     pem = PoseEstimatorModel()
@@ -343,27 +444,13 @@ if __name__ == "__main__":
 
     dets, whole_image, whole_depth, whole_pts, K, model_points = pem.load_test_data_from_paths(
                                                                 cfg.rgb_path, cfg.depth_path, cfg.cam_path, cfg.cad_path, 
-                                                                cfg.seg_path, cfg.det_score_thresh)
+                                                                cfg.seg_path, cfg.det_score_thresh, mm_to_meters=True)
 
     input_data, detections = pem.prepare_test_data(dets, whole_image, whole_depth, whole_pts, K, model_points)
 
-    ninstance = input_data['pts'].size(0)
-    
-    print("=> running model ...")
     start_time = time.time()
-    with torch.no_grad():
-        input_data['dense_po'] = all_tem_pts.repeat(ninstance,1,1)
-        input_data['dense_fo'] = all_tem_feat.repeat(ninstance,1,1)
-        out = pem.model(input_data)
-
-    if 'pred_pose_score' in out.keys():
-        pose_scores = out['pred_pose_score'] * out['score']
-    else:
-        pose_scores = out['score']
-    pose_scores = pose_scores.detach().cpu().numpy()
-    pred_rot = out['pred_R'].detach().cpu().numpy()
-    pred_trans = out['pred_t'].detach().cpu().numpy() * 1000
-
+    pose_scores, pred_rot, pred_trans = pem.infer_pose(all_tem_pts, all_tem_feat, input_data)
+    pred_trans *= 1000.0 # convert from meters back to millimeters
     print(f"inference time: {time.time() - start_time:0.1f} seconds")
 
     print("=> saving results ...")
@@ -378,8 +465,5 @@ if __name__ == "__main__":
 
     print("=> visualizating ...")
     save_path = os.path.join(f"{cfg.output_dir}/sam6d_results", 'vis_pem.png')
-    valid_masks = pose_scores == pose_scores.max()
-    K = input_data['K'].detach().cpu().numpy()[valid_masks]
-    vis_img = visualize(whole_image, pred_rot[valid_masks], pred_trans[valid_masks], model_points*1000, K, save_path)
-    vis_img.save(save_path)
+    pem.render_predictions(whole_image, model_points, input_data, pose_scores, pred_rot, pred_trans, save_path)
 

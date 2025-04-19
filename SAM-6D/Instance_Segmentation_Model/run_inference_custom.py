@@ -409,6 +409,27 @@ def load_model(segmentor_model, stability_score_thresh):
     logging.info(f"model setup time: {elapsed_time:0.3f} seconds")
     return model, device
 
+
+def load_model_to_gpu(model):
+    cuda_device = torch.device("cuda")
+
+    model.descriptor_model.model = model.descriptor_model.model.to(cuda_device )
+    model.descriptor_model.model.device = cuda_device
+    
+    model.segmentor_model.model.predictor.model.to(cuda_device)
+    model.segmentor_model.model.predictor.model.device = cuda_device
+
+
+def unload_model_to_cpu(model):
+    cpu_device = torch.device("cpu")
+
+    model.descriptor_model.model = model.descriptor_model.model.to(cpu_device)
+    model.descriptor_model.model.device = cpu_device
+
+    model.segmentor_model.model.predictor.model.to(cpu_device)
+    model.segmentor_model.model.predictor.model.device = cpu_device
+
+
 def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh):
     """
     Load the CAD model, RGB image, depth image, and camera information, 

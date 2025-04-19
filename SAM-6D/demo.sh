@@ -2,9 +2,9 @@
 ## SCRIPT ARGUMENTS ##
 
 
-EXAMPLE_DIR=$EXAMPLE_INSIDE_CONTAINER_DIR
+#EXAMPLE_DIR=$EXAMPLE_INSIDE_CONTAINER_DIR
 # or set it to the following path if running this script directly on your host, i.e, outside Docker
-# EXAMPLE_DIR="SAM-6D/Data/Example"
+EXAMPLE_DIR="/home/joao/source/SAM-6D/SAM-6D/Data/Example"
 
 CAD_PATH=$EXAMPLE_DIR/obj_000005.ply    # path to a given cad model(mm)
 RGB_PATH=$EXAMPLE_DIR/rgb.png           # path to a given RGB image
@@ -12,8 +12,12 @@ DEPTH_PATH=$EXAMPLE_DIR/depth.png       # path to a given depth map(mm)
 CAMERA_PATH=$EXAMPLE_DIR/camera.json    # path to a given camera intrinsics matrix
 
 # path where to save results
-if [ -z "$OUTPUT_DIR" ]; then # if emtpy or unset
+if [ -z "$OUTPUT_DIR" ]; then # if empty or unset
   OUTPUT_DIR="$EXAMPLE_DIR/../output"
+fi
+
+if [ -z "$BLENDER_PATH" ]; then # if empty or unset
+  BLENDER_PATH="/home/joao/Downloads/blender-3.3.1-linux-x64"
 fi
 
 # Run instance segmentation model

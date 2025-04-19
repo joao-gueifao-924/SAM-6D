@@ -203,6 +203,28 @@ class Detections:
         instance. Be careful.
         """
         return Detections(self.__dict__.copy())
+    
+    def __iter__(self):
+        self._index = 0
+        return self
+
+    def __next__(self):
+        if self._index < len(self):
+            item = {}
+            for key in self.keys:
+                # Ensure all attributes have the same length
+                # before trying to index them
+                attribute = getattr(self, key)
+                if len(attribute) != len(self):
+                    raise ValueError(
+                        f"Attribute '{key}' has length {len(attribute)}, "
+                        f"but expected {len(self)} to match the number of detections."
+                    )
+                item[key] = attribute[self._index]
+            self._index += 1
+            return item
+        else:
+            raise StopIteration
 
 
 def convert_npz_to_json(idx, list_npz_paths):
