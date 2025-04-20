@@ -292,6 +292,7 @@ class PoseEstimatorModel:
         all_rgb_choose = []
         all_score = []
         all_dets = []
+        ret_dict = {}
         for inst in dets:
             
             # Compatible with both 'scores' and 'score' keys
@@ -361,11 +362,16 @@ class PoseEstimatorModel:
             all_score.append(score)
             all_dets.append(inst)
 
-        ret_dict = {}
-        ret_dict['pts'] = torch.stack(all_cloud).cuda()
-        ret_dict['rgb'] = torch.stack(all_rgb).cuda()
-        ret_dict['rgb_choose'] = torch.stack(all_rgb_choose).cuda()
-        ret_dict['score'] = torch.FloatTensor(all_score).cuda()
+        if len(dets) > 0:          
+            ret_dict['pts'] = torch.stack(all_cloud).cuda()
+            ret_dict['rgb'] = torch.stack(all_rgb).cuda()
+            ret_dict['rgb_choose'] = torch.stack(all_rgb_choose).cuda()
+            ret_dict['score'] = torch.FloatTensor(all_score).cuda()
+        else:
+            ret_dict['pts'] = torch.zeros((0,0,0)).cuda()
+            ret_dict['rgb'] = torch.zeros((0,0,0,0)).cuda()
+            ret_dict['rgb_choose'] = torch.zeros((0,0)).cuda()
+            ret_dict['score'] = torch.zeros((0,)).cuda()
 
         ninstance = ret_dict['pts'].size(0)
         ret_dict['model'] = torch.FloatTensor(model_points).unsqueeze(0).repeat(ninstance, 1, 1).cuda()
@@ -412,9 +418,14 @@ class PoseEstimatorModel:
                 all_pred_rot_list.append(out_chunk['pred_R'].detach().cpu())
                 all_pred_trans_list.append(out_chunk['pred_t'].detach().cpu())
 
-            pose_scores = torch.cat(all_pose_scores_list, dim=0).numpy()
-            pred_rot = torch.cat(all_pred_rot_list, dim=0).numpy()
-            pred_trans = torch.cat(all_pred_trans_list, dim=0).numpy()
+            if ninstance > 0:
+                pose_scores = torch.cat(all_pose_scores_list, dim=0).numpy()
+                pred_rot = torch.cat(all_pred_rot_list, dim=0).numpy()
+                pred_trans = torch.cat(all_pred_trans_list, dim=0).numpy()
+            else:
+                pose_scores = np.zeros((0,))
+                pred_rot = np.zeros((0,3,3))
+                pred_trans = np.zeros((0,3))
 
         return pose_scores,pred_rot,pred_trans
 
