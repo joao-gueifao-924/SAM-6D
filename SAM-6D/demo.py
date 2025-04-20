@@ -24,13 +24,21 @@ import Pose_Estimation_Model.run_inference_custom as PEM
 import subprocess
 
 
+class running_average_calc:
+    def __init__(self,):
+        self.count = 0.0
+        self.avg = 0.0
+    def update(self, new_val: float):
+        self.count += 1
+        self.avg += (new_val - self.avg) / self.count
 
 
 # TODO: need to wrap __main__ script into a new callable function "run_inference" so that we can import it here:
 #from Pose_Estimation_Model.run_inference_custom import run_inference as estimate_poses
 
 logging.basicConfig(level=logging.INFO)
-TARGET_OBJECT_IDS = None #[8, 19]
+TARGET_OBJECT_IDS = []
+TARGET_GROUP_IDS = []
 IPD_DATASET_ROOT_DIR = "/ipd" # keep in sync with run_container.sh
 
 DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-4.2.1-linux-x64"
@@ -159,13 +167,13 @@ if __name__=='__main__':
 
     reader = ipdreader.IpdReader(root_folder=IPD_DATASET_ROOT_DIR, shorter_side=SHORTER_SIDE)
 
-    # get only one group and one camera for now:
-    group_id = reader.enumerate_groups()[0]
     camera_id = 1
 
-    start_time_overrall = time.perf_counter()
+    start_time_overrall = time.time()
     elapsed_time_inference = 0
     total_inferences_made = 0
+
+    avg_total_inference_time = running_average_calc() # running average of inference time for each image as a whole
 
     # Get the directory where the current script is located
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -188,110 +196,123 @@ if __name__=='__main__':
         gc.collect()
         torch.cuda.empty_cache()
 
-    for scene_id in reader.enumerate_scenes(group_id):
-        logging.info(f"Start of scene: {scene_id}")
-        color = reader.get_rgb_image(group_id, scene_id, camera_id)
-        depth = reader.get_depth_image(group_id, scene_id, camera_id)
-        K = reader.get_camera_intrinsics_K_matrix(group_id, scene_id, camera_id)
+    for group_id in reader.enumerate_groups():
+        if TARGET_GROUP_IDS is not None and len(TARGET_GROUP_IDS) > 0 and object_class_id not in TARGET_GROUP_IDS:
+            continue
+        for scene_id in reader.enumerate_scenes(group_id):
+            logging.info(f"Start of scene: {scene_id}")
+            color = reader.get_rgb_image(group_id, scene_id, camera_id)
+            depth = reader.get_depth_image(group_id, scene_id, camera_id)
+            K = reader.get_camera_intrinsics_K_matrix(group_id, scene_id, camera_id)
 
-        whole_pts = pem.get_point_cloud_from_depth(depth, K)
-        
-        all_image_detections, query_decriptors, query_appe_descriptors = ISM.infer_on_image(color, segmentator_model)
+            whole_pts = pem.get_point_cloud_from_depth(depth, K)
+            
+            all_image_detections, query_decriptors, query_appe_descriptors = ISM.infer_on_image(color, segmentator_model)
 
-        for object_class_id, object_instance_ids in reader.enumerate_objects(group_id, scene_id, camera_id).items():
-            if TARGET_OBJECT_IDS is not None and len(TARGET_OBJECT_IDS) > 0 and object_class_id not in TARGET_OBJECT_IDS:
-                continue
+            total_known_objs_present = len(reader.enumerate_objects(group_id, scene_id, camera_id).items())
+            logging.info(f"Total of {total_known_objs_present} known objects are present in group {group_id}, scene {scene_id}, cam {camera_id}")
+
+            for object_class_id, object_instance_ids in reader.enumerate_objects(group_id, scene_id, camera_id).items():
+                if TARGET_OBJECT_IDS is not None and len(TARGET_OBJECT_IDS) > 0 and object_class_id not in TARGET_OBJECT_IDS:
+                    continue
+                
+                start_whole_image_inference_time = time.time()
+
+                # render_object_templates is smart in the sense that 
+                # it avoid re-rendering templates for the same object class if its
+                # corresponding  template images are already present in its cache folder.
+                start_time = time.time()
+                mesh = reader.get_object_mesh(object_class_id)
+                render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR)
+                logging.info(f"Load 3D object mesh and rendering templates time: {time.time() - start_time} seconds")
+
+                # 1st stage
+                # Let's infer 2D object detections
+
+                start_time = time.time()
+                ISM.init_templates(
+                    get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
+                    segmentator_model, device)
+                logging.info(f"init_templates into segmentator_model time: {time.time() - start_time} seconds")
 
 
-            # render_object_templates is smart in the sense that 
-            # it avoid re-rendering templates for the same object class if its
-            # corresponding  template images are already present in its cache folder.
-            start_time = time.time()
-            mesh = reader.get_object_mesh(object_class_id)
-            render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR)
-            logging.info(f"Load 3D object mesh and rendering templates time: {time.time() - start_time} seconds")
+                obj_class_id_path = None
+                if os.path.isdir(OUTPUT_DIR):
+                    group_id_path = ALGORITHM_OUTPUT + "/" + f"{group_id:06d}"
+                    scene_id_path = group_id_path + "/" + f"{scene_id:06d}"
+                    camera_id_path = scene_id_path + "/" + str(camera_id) # no leading zeros for camera id numeric value
+                    obj_class_id_path = camera_id_path + "/" + f"{object_class_id:06d}"
+                    os.makedirs(obj_class_id_path, exist_ok=True)
 
-            # 1st stage
-            # Let's infer 2D object detections
-
-            start_time = time.time()
-            ISM.init_templates(
-                get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
-                segmentator_model, device)
-            logging.info(f"init_templates into segmentator_model time: {time.time() - start_time} seconds")
-
-
-            obj_class_id_path = None
-            if os.path.isdir(OUTPUT_DIR):
-                group_id_path = ALGORITHM_OUTPUT + "/" + f"{group_id:06d}"
-                scene_id_path = group_id_path + "/" + f"{scene_id:06d}"
-                camera_id_path = scene_id_path + "/" + str(camera_id) # no leading zeros for camera id numeric value
-                obj_class_id_path = camera_id_path + "/" + f"{object_class_id:06d}"
-                os.makedirs(obj_class_id_path, exist_ok=True)
-
-            obj_class_detections = ISM.run_inference(
-                model=segmentator_model, 
-                device=device,
-                low_gpu_mem_mode=LOW_GPU_MEMORY_MODE,
-                output_dir=obj_class_id_path, 
-                cad_model=mesh,
-                rgb_image=color,
-                all_image_detections=all_image_detections,
-                query_decriptors=query_decriptors, 
-                query_appe_descriptors=query_appe_descriptors, 
-                depth_image=depth, 
-                cam_K=K, 
-                depth_scale=1.0,
-                min_detection_final_score=MIN_SEGMENTATION_FINAL_SCORE
-            )
-                    
+                obj_class_detections = ISM.run_inference(
+                    model=segmentator_model, 
+                    device=device,
+                    low_gpu_mem_mode=LOW_GPU_MEMORY_MODE,
+                    output_dir=obj_class_id_path, 
+                    cad_model=mesh,
+                    rgb_image=color,
+                    all_image_detections=all_image_detections,
+                    query_decriptors=query_decriptors, 
+                    query_appe_descriptors=query_appe_descriptors, 
+                    depth_image=depth, 
+                    cam_K=K, 
+                    depth_scale=1.0,
+                    min_detection_final_score=MIN_SEGMENTATION_FINAL_SCORE
+                )
+                        
             if False and obj_class_id_path is not None and len(obj_class_id_path) > 0:
-                ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
+                    ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
 
-            if LOW_GPU_MEMORY_MODE:
-                ISM.unload_model_to_cpu(segmentator_model)
-                gc.collect()
-                torch.cuda.empty_cache()
-                pem.load_model_to_gpu()
-                gc.collect()
-                torch.cuda.empty_cache()
+                if LOW_GPU_MEMORY_MODE:
+                    ISM.unload_model_to_cpu(segmentator_model)
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    pem.load_model_to_gpu()
+                    gc.collect()
+                    torch.cuda.empty_cache()
 
+                
+                # 2nd stage
+                # Now that we have the 2D object detections, let's run pose inference on each detection.
+                
+                start_time = time.time()
+                all_tem_pts, all_tem_feat = pem.get_templates(
+                    os.path.join(get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
+                )
+                logging.info(f"get_templates time: {time.time() - start_time} seconds")
+
+                start_time = time.time()
+                model_points = pem.sample_points_from_mesh(mesh)
+                input_data, detections = pem.prepare_test_data(obj_class_detections, color, depth, whole_pts, K, model_points)
+                logging.info(f"sample_points_from_mesh and prepare_test_data time: {time.time() - start_time} seconds")
+
+                start_time = time.time()
+                pose_scores, pred_rot, pred_trans = pem.infer_pose(all_tem_pts, all_tem_feat, input_data)
+                pred_trans *= 1000.0 # convert from meters back to millimeters
+                logging.info(f"infer_pose time: {time.time() - start_time} seconds")
+
+                pem.render_predictions(color, model_points, input_data, pose_scores, pred_rot, pred_trans, os.path.join(obj_class_id_path, "vis_pem.png"),
+                                        only_highest_score = False, meters2mm=True)
+                
+                if LOW_GPU_MEMORY_MODE:
+                    pem.unload_model_to_cpu()
+                    gc.collect()
+                    torch.cuda.empty_cache()
+                    ISM.load_model_to_gpu(segmentator_model)
+                    gc.collect()
+                    torch.cuda.empty_cache()
+
+                avg_total_inference_time.update(time.time() - start_whole_image_inference_time)
+                logging.info(f"Avg. infer. time per image: {avg_total_inference_time.avg} seconds")
+                logging.info(f"Total inferences made: {avg_total_inference_time.count}")
             
-            # 2nd stage
-            # Now that we have the 2D object detections, let's run pose inference on each detection.
-            
-            start_time = time.time()
-            all_tem_pts, all_tem_feat = pem.get_templates(
-                os.path.join(get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
-            )
-            logging.info(f"get_templates time: {time.time() - start_time} seconds")
+                # No need to iterate over object instances within each class.
+                # SAM-6D detects all instances and infers their poses in a single pass, above.
+                # object_instance_ids = object_instance_ids[0 : min(2, len(object_instance_ids)) ] # use only a couple of instances for each object class, just to test drive
+                # for object_instance_id in object_instance_ids:
+                #     #mask = reader.get_visible_object_mask(group_id, scene_id, camera_id, object_instance_id)
+                #     pass
 
-            start_time = time.time()
-            model_points = pem.sample_points_from_mesh(mesh)
-            input_data, detections = pem.prepare_test_data(obj_class_detections, color, depth, whole_pts, K, model_points)
-            logging.info(f"sample_points_from_mesh and prepare_test_data time: {time.time() - start_time} seconds")
-
-            start_time = time.time()
-            pose_scores, pred_rot, pred_trans = pem.infer_pose(all_tem_pts, all_tem_feat, input_data)
-            pred_trans *= 1000.0 # convert from meters back to millimeters
-            logging.info(f"infer_pose time: {time.time() - start_time} seconds")
-
-            total_inferences_made += 1
-
-            pem.render_predictions(color, model_points, input_data, pose_scores, pred_rot, pred_trans, os.path.join(obj_class_id_path, "vis_pem.png"),
-                                    only_highest_score = False, meters2mm=True)
-            
-            if LOW_GPU_MEMORY_MODE:
-                pem.unload_model_to_cpu()
-                gc.collect()
-                torch.cuda.empty_cache()
-                ISM.load_model_to_gpu(segmentator_model)
-                gc.collect()
-                torch.cuda.empty_cache()
-        
-            # No need to iterate over object instances within each class.
-            # SAM-6D detects all instances and infers their poses in a single pass, above.
-            # object_instance_ids = object_instance_ids[0 : min(2, len(object_instance_ids)) ] # use only a couple of instances for each object class, just to test drive
-            # for object_instance_id in object_instance_ids:
-            #     #mask = reader.get_visible_object_mask(group_id, scene_id, camera_id, object_instance_id)
-            #     pass
+    total_time_overall = time.time() - start_time_overrall
+    logging.info(f"Overall script time: {total_time_overall} seconds")
+    logging.info(f"Avg inference image time: {(total_time_overall/total_inferences_made)} seconds")
