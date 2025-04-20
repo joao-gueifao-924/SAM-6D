@@ -17,7 +17,7 @@ if [ -z "$OUTPUT_DIR" ]; then # if empty or unset
 fi
 
 if [ -z "$BLENDER_PATH" ]; then # if empty or unset
-  BLENDER_PATH="/home/joao/Downloads/blender-3.3.1-linux-x64"
+  BLENDER_PATH="/home/joao/Downloads/blender-4.2.1-linux-x64"
 fi
 
 # Run instance segmentation model

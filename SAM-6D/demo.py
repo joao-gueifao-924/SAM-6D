@@ -33,7 +33,7 @@ logging.basicConfig(level=logging.INFO)
 TARGET_OBJECT_IDS = None #[8, 19]
 IPD_DATASET_ROOT_DIR = "/ipd" # keep in sync with run_container.sh
 
-DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-3.3.1-linux-x64"
+DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-4.2.1-linux-x64"
 DEFAULT_OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"
 OBJECT_MESH_DIR = "/media/joao/061A31701A315E3D2/ipd-dataset/bpc_baseline/datasets/models"
 
