@@ -148,9 +148,17 @@ class Detections:
             mask_size == box_size == score_size == object_id_size
         ), f"Size mismatch {mask_size} {box_size} {score_size} {object_id_size}"
 
-    def to_numpy(self):
-        for key in self.keys:
-            setattr(self, key, getattr(self, key).cpu().numpy())
+    def to_numpy(self, inplace=True):
+        if inplace:
+            for key in self.keys:
+                val = getattr(self, key).cpu().numpy()
+                setattr(self, key, val)
+        else:
+            numpy_versions = {}
+            for key in self.keys:
+                numpy_versions[key] = getattr(self, key).cpu().numpy()
+            
+            return Detections(numpy_versions)
 
     def to_torch(self):
         for key in self.keys:

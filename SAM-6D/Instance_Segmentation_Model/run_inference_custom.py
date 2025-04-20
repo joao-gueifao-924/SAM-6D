@@ -312,7 +312,7 @@ def run_inference(model, device, low_gpu_mem_mode, output_dir, cad_model, rgb_im
 
 
 def save_output(output_dir, rgb_image, detections, only_best_detection=True):
-    detections.to_numpy()
+    detections = detections.to_numpy(inplace=False)
     save_path = f"{output_dir}/sam6d_results/detection_ism"
     os.makedirs(save_path, exist_ok=False)
     detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
