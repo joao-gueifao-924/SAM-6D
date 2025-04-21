@@ -1,31 +1,41 @@
+# syntax=docker/dockerfile:1
+
 # Use the specified NVIDIA CUDA base image
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
 
 # Set environment variables to prevent interactive prompts during package installations
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Some official base images (like Ubuntu) include the following configuration file that automatically runs apt-get clean after installations. 
+# To ensure your cache mount for /var/cache/apt/archives is effective, it's recommended to remove this file in a preceding RUN step, 
+# as shown in examples in the search results
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
+
 # Install dependencies needed for Miniforge installation (wget, bash)
 # and clean up apt cache afterwards
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        wget \
-        bash \
-        bzip2 \
-        git \
-        ca-certificates \
-    && apt-get clean \
+RUN --mount=type=cache,target=/var/cache/apt/archives \
+        apt-get update && apt-get install -y --no-install-recommends \
+            wget \
+            bash \
+            bzip2 \
+            git \
+            ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # These are needed by Blenderproc for offscreen 3D rendering
-RUN apt-get update && apt-get install -y \
-    libegl1 \
-    libgl1 \
-    libglx-mesa0 \
-    libgles2 \
-    libglvnd0 \
-    libglx0
-RUN apt-get install -y \
-    xvfb \
-    mesa-utils
+RUN --mount=type=cache,target=/var/cache/apt/archives \
+        apt-get update && apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libglx-mesa0 \
+            libgles2 \
+            libglvnd0 \
+            libglx0 \
+            xvfb \
+            mesa-utils \
+            libxi6 \
+            libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
 # Define Conda installation directory
 ENV CONDA_DIR=/opt/conda
@@ -37,7 +47,7 @@ RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/downlo
     && /bin/bash /tmp/miniforge.sh -b -p $CONDA_DIR \
     && rm /tmp/miniforge.sh \
     && $CONDA_DIR/bin/conda clean -tipy 
-                                            
+
 # Add Conda/Mamba binaries to the system PATH
 ENV PATH=$CONDA_DIR/bin:$PATH
 
@@ -45,24 +55,36 @@ ENV PATH=$CONDA_DIR/bin:$PATH
 # Assumes environment.yaml is in the same directory as the Dockerfile during build
 COPY SAM-6D/environment.yaml /tmp/environment.yaml
 
-# Update the base conda environment using the environment.yaml file
-# Using mamba env update is often faster than conda env update
+# Update the base conda environment using the environment.yaml file.
+# Using mamba env update is often faster than conda env update.
 # The -n base flag targets the base environment specifically
-# Use --solver=classic because we want Python 3.9.x, which depends on older OpenSSL 1.1.x.
-# The new conda/mamba solver depends on OpenSSL >3.4.x
-RUN conda env update -n base -f /tmp/environment.yaml \
+# We need to use --solver=classic if we are using Python 3.9.x, which depends on older OpenSSL 1.1.x.
+# while the new conda/mamba solver depends on OpenSSL >3.4.x, yielding a version range conflict.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    conda env update -n base -f /tmp/environment.yaml \
     && conda clean -afy \
     && rm /tmp/environment.yaml
 
-# blenderproc 2.6.1 is having difficulty downloading Blender 3.3 from the following URL on its own.
+
+###### Start of BlenderProc setup ######
+
+# blenderproc 2.8.0 is having difficulty downloading Blender 4.2.1 from the following URL on its own.
 # Let us download it ourselves instead, and then make blenderproc use a custom Blender installation
 # path at runtime. E.g.:
 # $> blenderproc run --custom-blender-path $BLENDER_PATH render_custom_templates.py --output_dir /Data/output --cad_path /Data/Example/obj_000005.ply
-RUN wget https://download.blender.org/release/Blender3.3/blender-3.3.1-linux-x64.tar.xz && \
-    tar -xf blender-3.3.1-linux-x64.tar.xz && \
-    rm blender-3.3.1-linux-x64.tar.xz
-ENV BLENDER_PATH=/blender-3.3.1-linux-x64
+# Define a target dir for the cache mount
+ARG BLENDER_CACHE_DIR=/cache/blender_download
+ARG BLENDER_NAME=blender-4.2.1-linux-x64
+ARG BLENDER_URL=https://download.blender.org/release/Blender4.2/${BLENDER_NAME}.tar.xz
+ENV BLENDER_PATH=/${BLENDER_NAME}
 
+RUN --mount=type=cache,id=blender-download-cache,target=${BLENDER_CACHE_DIR} \
+    wget -nc -P ${BLENDER_CACHE_DIR} ${BLENDER_URL} && \
+    mkdir -p ${BLENDER_PATH} && \
+    tar -xf ${BLENDER_CACHE_DIR}/${BLENDER_NAME}.tar.xz
+    # rm blender-4.2.1-linux-x64.tar.xz # do not remove the downloaded file, leave it in the Docker's mount cache!
+
+##### End of BlenderProc setup ######
 
 # Copy application code
 COPY SAM-6D/Render /SAM-6D/Render
@@ -88,9 +110,9 @@ RUN cd /SAM-6D/Pose_Estimation_Model/model/pointnet2 && python setup.py install
 
 # Copy the 4 PyTorch models used by SAM-6D
 COPY ./SAM-6D/Models/dinov2_vitl14_pretrain.pth /SAM-6D/Instance_Segmentation_Model/checkpoints/dinov2/dinov2_vitl14_pretrain.pth
-COPY ./SAM-6D/Models/FastSAM-x.pt /SAM-6D/Instance_Segmentation_Model/checkpoints/FastSAM/FastSAM-x.pt
-COPY ./SAM-6D/Models/sam_vit_h_4b8939.pth /SAM-6D/Instance_Segmentation_Model/checkpoints/segment-anything/sam_vit_h_4b8939.pth
-COPY ./SAM-6D/Models/sam-6d-pem-base.pth /SAM-6D/Pose_Estimation_Model/checkpoints/sam-6d-pem-base.pth
+COPY ./SAM-6D/Models/FastSAM-x.pt               /SAM-6D/Instance_Segmentation_Model/checkpoints/FastSAM/FastSAM-x.pt
+COPY ./SAM-6D/Models/sam_vit_h_4b8939.pth       /SAM-6D/Instance_Segmentation_Model/checkpoints/segment-anything/sam_vit_h_4b8939.pth
+COPY ./SAM-6D/Models/sam-6d-pem-base.pth        /SAM-6D/Pose_Estimation_Model/checkpoints/sam-6d-pem-base.pth
 
 # Copy the demo script
 COPY SAM-6D/demo.sh /SAM-6D/demo.sh
