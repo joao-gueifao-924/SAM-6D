@@ -56,9 +56,9 @@ timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
 ALGORITHM_OUTPUT = OUTPUT_DIR + "/" + timestamp
 
 LOW_GPU_MEMORY_MODE = True
-SHORTER_SIDE = 400
+SHORTER_SIDE = 720
 
-MIN_SEGMENTATION_FINAL_SCORE= 0.35
+MIN_SEGMENTATION_FINAL_SCORE= 0.0
 
 
 # Example of VS Code configuration (launch.json) for debugpy
@@ -260,7 +260,7 @@ if __name__=='__main__':
                     min_detection_final_score=MIN_SEGMENTATION_FINAL_SCORE
                 )
                         
-            if False and obj_class_id_path is not None and len(obj_class_id_path) > 0:
+                if True and obj_class_id_path is not None and len(obj_class_id_path) > 0:
                     ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
 
                 if LOW_GPU_MEMORY_MODE:
