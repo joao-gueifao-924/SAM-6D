@@ -33,6 +33,25 @@ from model.utils import Detections, convert_npz_to_json
 from model.loss import Similarity
 from utils.inout import load_json, save_json_bop23
 
+# TODO There is a dubplicate implementation of this method in Pose_Estimation_Model/run_inference_custom.py. Unify them.
+def str2bool(v):
+
+    print("type(v): ", type(v))
+    if isinstance(v, bool):
+       return v
+
+    if not isinstance(v, str):
+        raise argparse.ArgumentTypeError(f"Expected a string for boolean conversion, got {type(v)}.")
+
+    v = v.lower().strip()
+    if v in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        # Raise an error if the input is not a recognizable boolean string
+        raise argparse.ArgumentTypeError(f"Boolean value expected (e.g., 'true', 'false', '1', '0'), but received '{v}'.")
+
 inv_rgb_transform = T.Compose(
         [
             T.Normalize(
@@ -247,7 +266,20 @@ def infer_on_image(rgb_image, model):
     return detections, query_decriptors, query_appe_descriptors
 
 
-def run_inference(model, device, low_gpu_mem_mode, output_dir, cad_model, rgb_image, all_image_detections, query_decriptors, query_appe_descriptors, depth_image, cam_K, depth_scale, min_detection_final_score):
+def run_inference(  model,
+                    device,
+                    low_gpu_mem_mode,
+                    output_dir,
+                    cad_model,
+                    rgb_image,
+                    all_image_detections,
+                    query_decriptors,
+                    query_appe_descriptors,
+                    depth_image,
+                    cam_K,
+                    depth_scale,
+                    min_detection_final_score
+                    ):
     start_time = time.time()
     # matching descriptors
     (
@@ -314,7 +346,7 @@ def run_inference(model, device, low_gpu_mem_mode, output_dir, cad_model, rgb_im
 def save_output(output_dir, rgb_image, detections, only_best_detection=True):
     detections = detections.to_numpy(inplace=False)
     save_path = f"{output_dir}/sam6d_results/detection_ism"
-    os.makedirs(save_path, exist_ok=False)
+    os.makedirs(save_path, exist_ok=True)
     detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
     detections = convert_npz_to_json(idx=0, list_npz_paths=[save_path+".npz"])
     save_json_bop23(save_path+".json", detections)
@@ -430,7 +462,7 @@ def unload_model_to_cpu(model):
     model.segmentor_model.model.predictor.model.device = cpu_device
 
 
-def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh):
+def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh, low_gpu_memory_mode):
     """
     Load the CAD model, RGB image, depth image, and camera information, 
     and call the run_inference function with the loaded data.
@@ -453,18 +485,25 @@ def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, dept
     model, device = load_model(segmentor_model, stability_score_thresh)
     init_templates(output_dir, model, device)
 
-    # Call the existing run_inference function
-    run_inference(
+    all_image_detections, query_decriptors, query_appe_descriptors = infer_on_image(rgb_image, model)
+
+    obj_class_detections = run_inference(
         model,
         device,
-        output_dir=output_dir,
-        cad_model=cad_model,
-        rgb_image=rgb_image,
-        depth_image=depth_image,
-        cam_K=cam_K,
-        depth_scale=depth_scale,
-        stability_score_thresh=stability_score_thresh,
+        low_gpu_memory_mode,
+        output_dir,
+        cad_model,
+        rgb_image,
+        all_image_detections,
+        query_decriptors,
+        query_appe_descriptors,
+        depth_image,
+        cam_K,
+        depth_scale,
+        min_detection_final_score=0.0
     )
+
+    save_output(output_dir, rgb_image, obj_class_detections, only_best_detection=True)
 
 
 if __name__ == "__main__":
@@ -476,10 +515,11 @@ if __name__ == "__main__":
     parser.add_argument("--depth_path", nargs="?", help="Path to Depth image(mm)")
     parser.add_argument("--cam_path", nargs="?", help="Path to camera information")
     parser.add_argument("--stability_score_thresh", default=0.97, type=float, help="stability_score_thresh of SAM")
+    parser.add_argument("--low_gpu_memory_mode", type=str2bool, nargs='?', const=True, default=False, metavar="BOOLEAN", help="Use less GPU memory. Allows inference on a GPU with at least 8 GB of RAM")
     args = parser.parse_args()
     os.makedirs(f"{args.output_dir}/sam6d_results", exist_ok=True)
 
-    DO_DEBUG_SESSION = True
+    DO_DEBUG_SESSION = False
 
     if DO_DEBUG_SESSION:  # Hijack the script arguments
         ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
@@ -506,6 +546,8 @@ if __name__ == "__main__":
         depth_path=args.depth_path,
         cam_path=args.cam_path,
         stability_score_thresh=args.stability_score_thresh,
+        low_gpu_memory_mode=args.low_gpu_memory_mode
+        
     )
     elapsed_time = time.time() - start_time
     print(f"load_and_run_inference() time: {elapsed_time:0.3f} seconds")

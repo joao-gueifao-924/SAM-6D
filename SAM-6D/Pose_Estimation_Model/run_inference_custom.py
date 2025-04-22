@@ -22,6 +22,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'model'))
 sys.path.append(os.path.join(BASE_DIR, 'model', 'pointnet2'))
 
 # Convert string inputs to boolean
+# TODO There is a dubplicate implementation of this method in Instance_Segmentation_Model/run_inference_custom.py. Unify them.
 def str2bool(v):
 
     print("type(v): ", type(v))
@@ -77,12 +78,20 @@ def get_parser():
     parser.add_argument("--low_gpu_memory_mode", type=str2bool, nargs='?', const=True, default=False, metavar="BOOLEAN", help="Use less GPU memory. Allows inference on a GPU with at least 8 GB of RAM")
     args_cfg = parser.parse_args()
 
+    if False:
+        # Print all parsed arguments for debugging
+        print("--- Parsed Arguments ---")
+        for arg, value in vars(args_cfg).items():
+            print(f"{arg}: {value}")
+        print("------------------------")
+
+
     return args_cfg
 
 def init():
     args = get_parser()
 
-    DO_DEBUG_SESSION = True
+    DO_DEBUG_SESSION = False
 
     if DO_DEBUG_SESSION: # Hijack the script arguments
         ROOT_DIR = "/home/joao/source/SAM-6D/SAM-6D"
@@ -90,8 +99,7 @@ def init():
         RGB_PATH = f"{ROOT_DIR}/Data/Example/rgb.png"           # path to a given RGB image
         DEPTH_PATH = f"{ROOT_DIR}/Data/Example/depth.png"       # path to a given depth map(mm)
         CAMERA_PATH = f"{ROOT_DIR}/Data/Example/camera.json"    # path to given camera intrinsics
-        OUTPUT_DIR = f"{ROOT_DIR}/Data/output"         # path to a pre-defined file for saving results
-        TEMPLATE_ROOT_DIR = f"{OUTPUT_DIR}/templates"
+        OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"         # path to a pre-defined file for saving results
         LOW_GPU_MEMORY_MODE = True
         args.output_dir = OUTPUT_DIR
         args.cad_path = CAD_PATH
@@ -114,7 +122,6 @@ def init():
     cfg.test_iter = args.iter
 
     cfg.output_dir = args.output_dir
-    cfg.template_output_dir = TEMPLATE_ROOT_DIR  # TODO fix this
     cfg.cad_path = args.cad_path
     cfg.rgb_path = args.rgb_path
     cfg.depth_path = args.depth_path
@@ -218,10 +225,10 @@ class PoseEstimatorModel:
         MODEL = importlib.import_module(self.cfg.model_name)
         self.model = MODEL.Net(self.cfg.model, self.cfg.low_gpu_memory_mode)
         
-        if self.cfg.low_gpu_memory_mode:
-            self.model = self.model.cpu()
-        else:
-            self.model = self.model.cuda()
+        # if self.cfg.low_gpu_memory_mode:
+        #     self.model = self.model.cpu()
+        # else:
+        self.model = self.model.cuda()
 
         self.model.eval()
         checkpoint = os.path.join(os.path.dirname((os.path.abspath(__file__))), 'checkpoints', 'sam-6d-pem-base.pth')
@@ -433,7 +440,7 @@ class PoseEstimatorModel:
     def render_predictions(self, whole_image, model_points, input_data, pose_scores, pred_rot, pred_trans, save_path, only_highest_score = True, min_score_threshold=0.3, meters2mm=True):
         
         if only_highest_score:
-            valid_masks = pose_scores == pose_scores.max() and pose_scores >= min_score_threshold
+            valid_masks = (pose_scores == pose_scores.max()) & (pose_scores >= min_score_threshold)
         else:
             valid_masks = pose_scores >= min_score_threshold
         
@@ -447,7 +454,7 @@ if __name__ == "__main__":
     pem = PoseEstimatorModel()
 
     print("=> extracting templates ...")
-    all_tem_pts, all_tem_feat = pem.get_templates(pem.cfg.template_output_dir)
+    all_tem_pts, all_tem_feat = pem.get_templates(os.path.join(pem.cfg.output_dir, "templates"))
 
     print("=> loading input data ...")
     

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.7-labs # at the time of this comment, only 1.7-labs version supports --exclude flag, used below.
 
 # Use the specified NVIDIA CUDA base image
 FROM nvidia/cuda:12.8.1-cudnn-devel-ubuntu24.04
@@ -87,9 +87,11 @@ RUN --mount=type=cache,id=blender-download-cache,target=${BLENDER_CACHE_DIR} \
 ##### End of BlenderProc setup ######
 
 # Copy application code
+# Leave the run_inference_custom scripts to the very end because they are expected to change a lot during development
+# and we want to avoid re-running all these Docker layers that follow...
 COPY SAM-6D/Render /SAM-6D/Render
-COPY SAM-6D/Instance_Segmentation_Model /SAM-6D/Instance_Segmentation_Model
-COPY SAM-6D/Pose_Estimation_Model /SAM-6D/Pose_Estimation_Model
+COPY --exclude=run_inference_custom.py SAM-6D/Instance_Segmentation_Model /SAM-6D/Instance_Segmentation_Model
+COPY --exclude=run_inference_custom.py SAM-6D/Pose_Estimation_Model /SAM-6D/Pose_Estimation_Model
 
 
 # We must run render with BlenderProc at least once, because during first usage, 
@@ -117,7 +119,12 @@ COPY ./SAM-6D/Models/sam-6d-pem-base.pth        /SAM-6D/Pose_Estimation_Model/ch
 # Copy the demo script
 COPY SAM-6D/demo.sh /SAM-6D/demo.sh
 
+
+# Copy the two run_inference_custom.py files that we excluded earlier.
+COPY SAM-6D/Instance_Segmentation_Model/run_inference_custom.py /SAM-6D/Instance_Segmentation_Model/run_inference_custom.py
+COPY SAM-6D/Pose_Estimation_Model/run_inference_custom.py /SAM-6D/Pose_Estimation_Model/run_inference_custom.py
+
 # Set default command
-CMD ["/bin/bash"]
-#CMD ["/bin/bash", "-c", "cd /SAM-6D && bash demo.sh"]
+#CMD ["/bin/bash"]
+CMD ["/bin/bash", "-c", "cd /SAM-6D && bash demo.sh"]
 
