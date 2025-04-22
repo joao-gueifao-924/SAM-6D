@@ -43,14 +43,16 @@ IPD_DATASET_ROOT_DIR = "/ipd" # keep in sync with run_container.sh
 
 DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-4.2.1-linux-x64"
 DEFAULT_OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"
-OBJECT_MESH_DIR = "/media/joao/061A31701A315E3D2/ipd-dataset/bpc_baseline/datasets/models"
+DEFAULT_OBJECT_MESH_DIR = "/media/joao/061A31701A315E3D2/ipd-dataset/bpc_baseline/datasets/models"
 
 
 #overwrite the value above for now... #TODO FIX THIS
-IPD_DATASET_ROOT_DIR = "/media/joao/061A31701A315E3D2/ipd-dataset/bpc_baseline/datasets"
+#IPD_DATASET_ROOT_DIR = "/media/joao/061A31701A315E3D2/ipd-dataset/bpc_baseline/datasets"
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
 TEMPLATE_OUTPUT_ROOT_DIR = OUTPUT_DIR + "/sam6d_obj_templates"
+
+OBJECT_MESH_DIR = os.getenv("OBJECT_MESH_DIR", DEFAULT_OBJECT_MESH_DIR)
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
 ALGORITHM_OUTPUT = OUTPUT_DIR + "/" + timestamp
