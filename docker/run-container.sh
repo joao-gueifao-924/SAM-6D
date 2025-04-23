@@ -20,24 +20,35 @@ CONTEXT_PATH=$(realpath "$SCRIPT_DIR/..")
 # DEPTH_FILE=depth.png            # file with a given depth map(mm)
 # CAMERA_FILE=camera.json         # file to given camera intrinsics
 # SEGMENTOR_MODEL=fastsam         # either 'sam' or 'fastsam'
-OUTPUT_DIR=/algorithm_output    # path where to save results
-EXAMPLE_OUTSIDE_CONTAINER_DIR=$(realpath "$SCRIPT_DIR/../SAM-6D/Data/Example") # path outside Docker container that will be mounted
 
+OUTPUT_DIR=/algorithm_output      # path where to save results
 ALGORITHM_OUTPUT_OUTSIDE_CONTAINER_DIR=/home/joao/Downloads/algorithm_output
 
-# The name of the container that will be generated.
-IMAGE_NAME="sam-6d-container"
+EXAMPLE_OUTSIDE_CONTAINER_DIR=$(realpath "$SCRIPT_DIR/../SAM-6D/Data/Example") # path outside Docker container that will be mounted
 EXAMPLE_INSIDE_CONTAINER_DIR="/SAM-6D/Data/Example"
 
-IPD_DATASET_ROOT_FOLDER="/media/joao/061A31701A315E3D1/ipd-dataset/bpc_baseline/datasets"
+IPD_DATASET_ROOT_FOLDER="/mnt/061A31701A315E3D/ipd-dataset/bpc_baseline/datasets"
+OBJECT_MESH_DIR="/ipd/models"
+
+# The name of the container that will be generated.
+IMAGE_NAME="sam-6d"
+
 
 # Build the image specifying the Dockerfile location and the context directory
-docker build -t $IMAGE_NAME -f "$DOCKERFILE_PATH" "$CONTEXT_PATH" --build-arg EXAMPLE_INSIDE_CONTAINER_DIR
+DOCKER_BUILDKIT=1 docker buildx build --load -t $IMAGE_NAME -f "$DOCKERFILE_PATH" "$CONTEXT_PATH" --build-arg EXAMPLE_INSIDE_CONTAINER_DIR
+
+echo EXAMPLE_OUTSIDE_CONTAINER_DIR: $EXAMPLE_OUTSIDE_CONTAINER_DIR
+echo EXAMPLE_INSIDE_CONTAINER_DIR: $EXAMPLE_INSIDE_CONTAINER_DIR
+echo IPD_DATASET_ROOT_FOLDER: $IPD_DATASET_ROOT_FOLDER
+echo ALGORITHM_OUTPUT_OUTSIDE_CONTAINER_DIR: $ALGORITHM_OUTPUT_OUTSIDE_CONTAINER_DIR
+echo OUTPUT_DIR: $OUTPUT_DIR
+
 
 docker run \
   -it --rm --gpus all \
   -e EXAMPLE_INSIDE_CONTAINER_DIR=$EXAMPLE_INSIDE_CONTAINER_DIR \
   -e OUTPUT_DIR=$OUTPUT_DIR \
+  -e OBJECT_MESH_DIR=$OBJECT_MESH_DIR \
   --name $IMAGE_NAME \
   -v $EXAMPLE_OUTSIDE_CONTAINER_DIR:$EXAMPLE_INSIDE_CONTAINER_DIR:ro \
   -v "$IPD_DATASET_ROOT_FOLDER:/ipd:ro" \
