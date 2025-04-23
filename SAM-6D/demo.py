@@ -193,7 +193,7 @@ if __name__=='__main__':
     os.chdir(original_cwd)
 
     if LOW_GPU_MEMORY_MODE:
-        ISM.load_model_to_gpu(segmentator_model)
+        ISM.load_descriptormodel_to_gpu(segmentator_model)
         pem.unload_model_to_cpu()
         gc.collect()
         torch.cuda.empty_cache()
@@ -266,7 +266,7 @@ if __name__=='__main__':
                     ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
 
                 if LOW_GPU_MEMORY_MODE:
-                    ISM.unload_model_to_cpu(segmentator_model)
+                    ISM.unload_descriptormodel_to_cpu(segmentator_model)
                     gc.collect()
                     torch.cuda.empty_cache()
                     pem.load_model_to_gpu()
@@ -300,7 +300,7 @@ if __name__=='__main__':
                     pem.unload_model_to_cpu()
                     gc.collect()
                     torch.cuda.empty_cache()
-                    ISM.load_model_to_gpu(segmentator_model)
+                    ISM.load_descriptormodel_to_gpu(segmentator_model)
                     gc.collect()
                     torch.cuda.empty_cache()
 

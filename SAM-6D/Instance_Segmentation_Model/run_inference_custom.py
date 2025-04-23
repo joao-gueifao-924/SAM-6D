@@ -414,6 +414,14 @@ def load_model(segmentor_model, stability_score_thresh):
     else:
         raise ValueError("The segmentor_model {} is not supported now!".format(segmentor_model))
 
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # disable struct mode for this node so that we can change it:
+    target_node = cfg.model.segmentor_model
+    OmegaConf.set_struct(target_node, False)
+    target_node.device = str(device)
+
     logging.info("Initializing model")
     elapsed_time = time.time() - start_time
     logging.info(f"config time: {elapsed_time:0.3f} seconds")
@@ -425,16 +433,10 @@ def load_model(segmentor_model, stability_score_thresh):
 
     start_time = time.time()
     
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
     model.descriptor_model.model = model.descriptor_model.model.to(device)
     model.descriptor_model.model.device = device
     # if there is predictor in the model, move it to device
-    if hasattr(model.segmentor_model, "predictor"):
-        model.segmentor_model.predictor.model = (
-            model.segmentor_model.predictor.model.to(device)
-        )
-    else:
-        model.segmentor_model.model.setup_model(device=device, verbose=True)
     logging.info(f"Moving models to {device} done!")
     
     elapsed_time = time.time() - start_time
@@ -442,24 +444,16 @@ def load_model(segmentor_model, stability_score_thresh):
     return model, device
 
 
-def load_model_to_gpu(model):
+def load_descriptormodel_to_gpu(model):
     cuda_device = torch.device("cuda")
-
     model.descriptor_model.model = model.descriptor_model.model.to(cuda_device )
     model.descriptor_model.model.device = cuda_device
     
-    model.segmentor_model.model.predictor.model.to(cuda_device)
-    model.segmentor_model.model.predictor.model.device = cuda_device
 
-
-def unload_model_to_cpu(model):
+def unload_descriptormodel_to_cpu(model):
     cpu_device = torch.device("cpu")
-
     model.descriptor_model.model = model.descriptor_model.model.to(cpu_device)
     model.descriptor_model.model.device = cpu_device
-
-    model.segmentor_model.model.predictor.model.to(cpu_device)
-    model.segmentor_model.model.predictor.model.device = cpu_device
 
 
 def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, depth_path, cam_path, stability_score_thresh, low_gpu_memory_mode):

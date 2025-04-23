@@ -11,7 +11,6 @@ import logging
 import os.path as osp
 from typing import Any, Dict, List, Optional, Tuple
 import pytorch_lightning as pl
-from ultralytics import yolo  # noqa
 from ultralytics.nn.autobackend import AutoBackend
 
 
@@ -39,36 +38,14 @@ class CustomYOLO(YOLO):
         self.overrides["conf"] = 0.25
         self.overrides["mode"] = "predict"
         self.overrides["save"] = False
+        self.overrides["device"] = selected_device
 
-        self.predictor = yolo.v8.segment.SegmentationPredictor(
-            overrides=self.overrides, _callbacks=self.callbacks
-        )
 
-        self.not_setup = True
-        self.selected_device = selected_device
         logging.info(f"Init CustomYOLO done!")
 
-    def setup_model(self, device, verbose=False):
-        """Initialize YOLO model with given parameters and set it to evaluation mode."""
-        model = self.predictor.model or self.predictor.args.model
-        self.predictor.args.half &= (
-            device.type != "cpu"
-        )  # half precision only supported on CUDA
-        self.predictor.model = AutoBackend(
-            model,
-            device=device,
-            dnn=self.predictor.args.dnn,
-            data=self.predictor.args.data,
-            fp16=self.predictor.args.half,
-            fuse=True,
-            verbose=verbose,
-        )
-        self.predictor.device = device
-        self.predictor.model.eval()
-        logging.info(f"Setup model at device {device} done!")
 
     def __call__(self, source=None, stream=False):
-        return self.predictor(source=source, stream=stream)
+        return self.predict(source=source, stream=stream)
 
 
 class FastSAM(object):
@@ -88,7 +65,6 @@ class FastSAM(object):
             segmentor_width_size=segmentor_width_size,
         )
         self.segmentor_width_size = segmentor_width_size
-        self.current_device = device
         logging.info(f"Init FastSAM done!")
 
     def postprocess_resize(self, detections, orig_size, update_boxes=False):
@@ -118,10 +94,12 @@ class FastSAM(object):
         masks = detections[0].masks.data
         boxes = detections[0].boxes.data[:, :4]  # two lasts:  confidence and class
 
+        current_device = self.model.overrides.get("device", "cpu") # Get device from override
+
         # define class data
         mask_data = {
-            "masks": masks.to(self.current_device),
-            "boxes": boxes.to(self.current_device),
+            "masks": masks.to(current_device),
+            "boxes": boxes.to(current_device),
         }
         if self.segmentor_width_size is not None:
             mask_data = self.postprocess_resize(mask_data, orig_size)

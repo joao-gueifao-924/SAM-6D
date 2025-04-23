@@ -20,7 +20,25 @@ RUN --mount=type=cache,target=/var/cache/apt/archives \
             bzip2 \
             git \
             ca-certificates \
+            software-properties-common \
+            && add-apt-repository ppa:deadsnakes/ppa -y \
+            && apt-get update && apt-get install -y --no-install-recommends \
+                python3.12 \
+                python3.12-venv \
+                python3.12-dev \
+                python3-pip \
     && rm -rf /var/lib/apt/lists/*
+
+# Update alternatives to make python3.12 the default python/python3
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3.12 1 \
+&& update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
+
+
+# We don't use Python virtual environments. We install everything into root environment.
+RUN python -m pip config set global.break-system-packages true
+
+# Upgrade pip
+#RUN python -m pip install --upgrade pip
 
 # These are needed by Blenderproc for offscreen 3D rendering
 RUN --mount=type=cache,target=/var/cache/apt/archives \
@@ -37,33 +55,22 @@ RUN --mount=type=cache,target=/var/cache/apt/archives \
             libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Define Conda installation directory
-ENV CONDA_DIR=/opt/conda
 
-# Download and install Miniforge silently
-# Using uname -m ensures the correct architecture is downloaded (e.g., x86_64, aarch64)
-# Clean up tarballs and package cache
-RUN wget --quiet https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-$(uname -m).sh -O /tmp/miniforge.sh \
-    && /bin/bash /tmp/miniforge.sh -b -p $CONDA_DIR \
-    && rm /tmp/miniforge.sh \
-    && $CONDA_DIR/bin/conda clean -tipy 
 
-# Add Conda/Mamba binaries to the system PATH
-ENV PATH=$CONDA_DIR/bin:$PATH
+# Install Python dependencies using pip
+# Using a cache mount for pip cache
+# Note: torch and torchvision need to be installed outside requirements.txt file, because we need to specify the --index-url in order to specify CUDA version.
+# requirements.txt file grammar does not support --index-url for specific packages, only for entire file as a whole.
+#RUN pip install torch torchvision xformers --index-url https://download.pytorch.org/whl/cu126
+RUN pip install torch==2.3.1 torchvision==0.18.1 xformers --index-url https://download.pytorch.org/whl/cu121
 
-# Copy the environment file into the container
-# Assumes environment.yaml is in the same directory as the Dockerfile during build
-COPY SAM-6D/environment.yaml /tmp/environment.yaml
+# Copy the requirements file into the container
+# Assumes requirements.txt is in the same directory as the Dockerfile during build
+COPY SAM-6D/requirements.txt /tmp/requirements.txt
 
-# Update the base conda environment using the environment.yaml file.
-# Using mamba env update is often faster than conda env update.
-# The -n base flag targets the base environment specifically
-# We need to use --solver=classic if we are using Python 3.9.x, which depends on older OpenSSL 1.1.x.
-# while the new conda/mamba solver depends on OpenSSL >3.4.x, yielding a version range conflict.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    conda env update -n base -f /tmp/environment.yaml \
-    && conda clean -afy \
-    && rm /tmp/environment.yaml
+    python -m pip install -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
 
 
 ###### Start of BlenderProc setup ######
