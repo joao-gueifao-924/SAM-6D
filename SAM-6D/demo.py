@@ -1,4 +1,5 @@
 import os, sys
+from types import SimpleNamespace
 
 # Get the directory where demo.py is located
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,9 +20,9 @@ import numpy as np
 from datetime import datetime
 import time, logging
 import ipdreader
+import runtime_utils
 import Instance_Segmentation_Model.run_inference_custom as ISM
 import Pose_Estimation_Model.run_inference_custom as PEM
-import subprocess
 
 
 class running_average_calc:
@@ -53,6 +54,7 @@ OUTPUT_DIR = os.getenv("OUTPUT_DIR", DEFAULT_OUTPUT_DIR)
 TEMPLATE_OUTPUT_ROOT_DIR = OUTPUT_DIR + "/sam6d_obj_templates"
 
 OBJECT_MESH_DIR = os.getenv("OBJECT_MESH_DIR", DEFAULT_OBJECT_MESH_DIR)
+BLENDER_PATH = os.getenv('BLENDER_PATH', DEFAULT_BLENDER_PATH)
 
 timestamp = datetime.now().strftime("%Y-%m-%d_%H%M")
 ALGORITHM_OUTPUT = OUTPUT_DIR + "/" + timestamp
@@ -94,71 +96,6 @@ if DEBUG_STEP_THROUGH:
 
 
 
-def render_object_templates(object_class_id, object_meshes_dir, render_dir, template_output_root_dir):
-    blender_path = os.getenv('BLENDER_PATH', DEFAULT_BLENDER_PATH)
-    TOTAL_TEMPLATES_EXPECTED = 42
-    
-    cad_path = os.path.join(object_meshes_dir, f"obj_{object_class_id:06d}.ply")
-
-    blenderproc_script_path = os.path.join(render_dir, 'render_custom_templates.py')
-    # Make sure it's truly absolute
-    blenderproc_script_path = os.path.abspath(blenderproc_script_path)
-
-    this_object_template_output_dir = get_obj_template_dir(object_class_id, template_output_root_dir)
-
-    mask_files = sorted(glob.glob(f'{this_object_template_output_dir}/templates/mask_*.png'))
-    rgb_files  = sorted(glob.glob(f'{this_object_template_output_dir}/templates/rgb_*.png'))
-    xyz_files  = sorted(glob.glob(f'{this_object_template_output_dir}/templates/xyz_*.npy'))
-
-    # If the images are already there, re-use them. Avoid re-rendering the same templates.
-    if (len(mask_files) == len(rgb_files) == len(xyz_files) == TOTAL_TEMPLATES_EXPECTED):
-        return
-
-    # --- Construct the command as a list ---
-    # This avoids shell injection issues compared to shell=True
-    command = [
-        'blenderproc',
-        'run',
-        blenderproc_script_path,
-        '--custom-blender-path', blender_path,
-        '--output_dir', this_object_template_output_dir,
-        '--cad_path', cad_path,
-        # '--colorize', 'True' # Add this back if needed, ensure it's part of the list
-    ]
-
-    logging.info(f"Executing command: {' '.join(command)}")
-    logging.info(f"Working directory: {render_dir}")
-
-
-    try:
-        result = subprocess.run(
-            command,
-            cwd=render_dir,
-            check=True,
-            capture_output=True, # Optional: remove if you want output directly in terminal
-            text=True           # Optional: remove if you don't need decoded text
-        )
-        # Optional: Print captured output
-        logging.info("Command executed successfully.")
-        # print("STDOUT:")
-        # print(result.stdout)
-        if len(result.stderr) > 0:
-            logging.error("STDERR from BlenderProc call: " + result.stderr)
-
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Error executing command: {e}")
-        logging.error(f"Return code: {e.returncode}")
-        # --- Add these lines ---
-        logging.error("Captured STDOUT:")
-        logging.error(e.stdout) # stdout is captured if capture_output=True
-        logging.error("Captured STDERR:") # <--- THIS IS OFTEN MOST IMPORTANT
-        logging.error(e.stderr) # stderr is captured if capture_output=True
-        # --- End added lines ---
-        sys.exit(1)
-
-def get_obj_template_dir(object_class_id, template_output_root_dir):
-    this_object_template_output_dir = template_output_root_dir + f"/obj_{object_class_id:06d}"
-    return this_object_template_output_dir
 
 
 if __name__=='__main__':
@@ -189,7 +126,9 @@ if __name__=='__main__':
     os.chdir(original_cwd)
 
     target_cwd = os.path.join(script_dir, 'Pose_Estimation_Model'); os.chdir(target_cwd)
-    pem = PEM.PoseEstimatorModel()
+    args = SimpleNamespace()
+    args.low_gpu_memory_mode = LOW_GPU_MEMORY_MODE
+    pem = PEM.PoseEstimatorModel(args)
     os.chdir(original_cwd)
 
     if LOW_GPU_MEMORY_MODE:
@@ -225,7 +164,7 @@ if __name__=='__main__':
                 # corresponding  template images are already present in its cache folder.
                 start_time = time.time()
                 mesh = reader.get_object_mesh(object_class_id)
-                render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR)
+                runtime_utils.render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR, BLENDER_PATH)
                 logging.info(f"Load 3D object mesh and rendering templates time: {time.time() - start_time} seconds")
 
                 # 1st stage
@@ -233,7 +172,7 @@ if __name__=='__main__':
 
                 start_time = time.time()
                 ISM.init_templates(
-                    get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
+                    runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
                     segmentator_model, device)
                 logging.info(f"init_templates into segmentator_model time: {time.time() - start_time} seconds")
 
@@ -279,7 +218,7 @@ if __name__=='__main__':
                 
                 start_time = time.time()
                 all_tem_pts, all_tem_feat = pem.get_templates(
-                    os.path.join(get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
+                    os.path.join(runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
                 )
                 logging.info(f"get_templates time: {time.time() - start_time} seconds")
 

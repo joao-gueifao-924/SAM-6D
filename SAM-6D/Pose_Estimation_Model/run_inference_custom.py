@@ -88,8 +88,27 @@ def get_parser():
 
     return args_cfg
 
-def init():
-    args = get_parser()
+def init(args = None):
+    if args is None:
+        args = get_parser() # for some reason we must avoid argparse inside the BPC Challenge environment. It leads to weird behaviour.
+    else: # hence we provide the default argument values that are typically not passed by in the command line...
+        # Copying default argument values from argparser inside get_parser(). TODO eliminate dual source of truth -- unify!
+        args.gpus = 0
+        args.model = "pose_estimation_model"
+        args.config = "config/base.yaml"
+        args.iter = 600000
+        args.exp_id = 0
+        args.det_score_thresh = 0.2
+        #os.chdir(f"{ROOT_DIR}/Pose_Estimation_Model") TODO do I need to do this??
+
+        # ...and we set the ones that are to be passed by the command line to None. These attributes must still exist, although their values are irrelevant
+        # TODO these are to be eliminated eventually
+        args.output_dir = None
+        args.cad_path = None
+        args.rgb_path = None
+        args.depth_path = None
+        args.cam_path = None
+        args.seg_path = None
 
     DO_DEBUG_SESSION = False
 
@@ -214,8 +233,8 @@ def get_templates(path, cfg):
 
 
 class PoseEstimatorModel:
-    def __init__(self):
-        self.cfg = init()
+    def __init__(self, args=None):
+        self.cfg = init(args)
 
         random.seed(self.cfg.rd_seed)
         torch.manual_seed(self.cfg.rd_seed)

@@ -122,11 +122,13 @@ COPY ./SAM-6D/Models/dinov2_vitl14_pretrain.pth /SAM-6D/Instance_Segmentation_Mo
 COPY ./SAM-6D/Models/FastSAM-x.pt               /SAM-6D/Instance_Segmentation_Model/checkpoints/FastSAM/FastSAM-x.pt
 COPY ./SAM-6D/Models/sam_vit_h_4b8939.pth       /SAM-6D/Instance_Segmentation_Model/checkpoints/segment-anything/sam_vit_h_4b8939.pth
 COPY ./SAM-6D/Models/sam-6d-pem-base.pth        /SAM-6D/Pose_Estimation_Model/checkpoints/sam-6d-pem-base.pth
+COPY ./SAM-6D/Models/mae_pretrain_vit_base.pth  /SAM-6D/Pose_Estimation_Model/checkpoints/mae_pretrain_vit_base.pth
 
 # Copy the demo scripts
 COPY SAM-6D/demo.sh /SAM-6D/demo.sh
 COPY SAM-6D/demo.py /SAM-6D/demo.py
 COPY SAM-6D/ipdreader.py /SAM-6D/ipdreader.py
+COPY SAM-6D/runtime_utils.py /SAM-6D/runtime_utils.py
 
 # Copy the two run_inference_custom.py files that we excluded earlier.
 COPY SAM-6D/Instance_Segmentation_Model/run_inference_custom.py /SAM-6D/Instance_Segmentation_Model/run_inference_custom.py
