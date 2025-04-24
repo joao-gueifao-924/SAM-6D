@@ -43,17 +43,18 @@ class IpdReader:
         self.downscale = 1
 
     @staticmethod
-    def load_object_meshes(mesh_folder):
+    def load_object_meshes(mesh_folder, load_info=False):
       """Load all object meshes from the models directory."""
       object_meshes = {}
       models_info = {}
       try:
         # Load models_info.json first
-        models_info_path = os.path.join(mesh_folder, "models_info.json")
-        with open(models_info_path, 'r') as f:
-          raw_models_info = json.load(f)
-          # Convert object class ID keys from strings to integers
-          models_info = {int(k): v for k, v in raw_models_info.items()}
+        if load_info:
+          models_info_path = os.path.join(mesh_folder, "models_info.json")
+          with open(models_info_path, 'r') as f:
+            raw_models_info = json.load(f)
+            # Convert object class ID keys from strings to integers
+            models_info = {int(k): v for k, v in raw_models_info.items()}
         
         # Load each object mesh
         mesh_files = glob.glob(os.path.join(mesh_folder, "obj_*.ply"))
