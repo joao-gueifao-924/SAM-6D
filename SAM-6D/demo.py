@@ -142,12 +142,12 @@ if __name__=='__main__':
     for object_class_id in reader.enumerate_object_class_ids():
         start_time = time.time()
         mesh = reader.get_object_mesh(object_class_id)
-        render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR)
+        runtime_utils.render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR, BLENDER_PATH)
         logging.info(f"Load 3D object mesh and rendering templates time: {time.time() - start_time} seconds")
 
         start_time = time.time()
         descriptors, appe_descriptors = ISM.init_templates(
-            get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
+            runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
             segmentator_model, device)
         template_descriptors[object_class_id] = {}
         template_descriptors[object_class_id]["descriptors"] = descriptors
