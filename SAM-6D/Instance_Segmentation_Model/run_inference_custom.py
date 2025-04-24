@@ -354,10 +354,18 @@ def save_output(output_dir, rgb_image, detections, only_best_detection=True):
     vis_img.save(f"{output_dir}/sam6d_results/vis_ism.png")
 
 def init_templates(output_dir, model, device):
-    logging.info("Initializing template")
-    start_time = time.time()
+    logging.info("Initializing templates")
 
     template_dir = os.path.join(output_dir, 'templates')
+    descriptors_path = os.path.join(output_dir, "descriptors.pt")
+    appe_descriptors_path = os.path.join(output_dir, "appe_descriptors.pt")
+
+    if os.path.exists(descriptors_path) and os.path.exists(appe_descriptors_path):
+        logging.info("Loading descriptors from disk.")
+        descriptors = torch.load(descriptors_path, map_location=device)
+        appe_descriptors = torch.load(appe_descriptors_path, map_location=device)
+        return descriptors, appe_descriptors
+
     num_templates = len(glob.glob(f"{template_dir}/*.npy"))
     boxes, masks, templates = [], [], []
     for idx in range(num_templates):
@@ -384,19 +392,23 @@ def init_templates(output_dir, model, device):
     templates = proposal_processor(images=templates, boxes=boxes).to(device)
     masks_cropped = proposal_processor(images=masks, boxes=boxes).to(device)
 
-    clear_ref_data(model)
-    model.ref_data["descriptors"] = model.descriptor_model.compute_features(
+    descriptors = model.descriptor_model.compute_features(
                     templates, token_name="x_norm_clstoken"
                 ).unsqueeze(0).data
-    model.ref_data["appe_descriptors"] = model.descriptor_model.compute_masked_patch_feature(
+    appe_descriptors = model.descriptor_model.compute_masked_patch_feature(
                     templates, masks_cropped[:, 0, :, :]
                 ).unsqueeze(0).data
     
-    elapsed_time = time.time() - start_time
-    logging.info(f"template init time: {elapsed_time:0.3f} seconds")
+    torch.save(descriptors, descriptors_path)
+    torch.save(appe_descriptors, appe_descriptors_path)
+    return descriptors, appe_descriptors
 
-def clear_ref_data(model):
+
+def reset_ref_data(model, descriptors, appe_descriptors):
     model.ref_data = {}
+    model.ref_data["descriptors"] = descriptors
+    model.ref_data["appe_descriptors"] = appe_descriptors
+
 
 def load_model(segmentor_model, stability_score_thresh):
     start_time = time.time()
