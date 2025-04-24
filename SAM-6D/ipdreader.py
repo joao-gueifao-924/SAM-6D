@@ -248,3 +248,9 @@ class IpdReader:
         if object_class_id not in self.object_meshes:
             raise KeyError(f"No mesh found for object class ID {object_class_id}")
         return self.object_meshes[object_class_id]
+    
+    def enumerate_object_class_ids(self) -> list:
+       """
+       Lists all Object class IDs in the dataset
+       """
+       return list(self.object_meshes.keys())
