@@ -7,3 +7,7 @@ SAM-6D/Models
 *.pth
 *.pt
 **/dist/**/*.egg
+**/output/templates/**
+**/Data/output/**
+**/site-packages/**
+sam6d-venv/*
