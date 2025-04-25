@@ -108,11 +108,11 @@ def draw_detections(image, pred_rots, pred_trans, pose_scores, model_points, int
     pil_image = Image.fromarray(draw_image_bbox)
     draw = ImageDraw.Draw(pil_image)
     try:
-        # Try loading a specific font like Arial
-        font = ImageFont.truetype("arial.ttf", font_size)
+        # Try loading a specific font like DejaVuSans
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
     except IOError:
         # Fallback to default font if specific font not found
-        print("Arial font not found, using default PIL font.")
+        print("DejaVuSans font not found, using default PIL font.")
         # Default font might not support size well, use default size
         font = ImageFont.load_default()
         # Adjust font size for default font - this might not work as expected

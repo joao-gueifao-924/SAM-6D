@@ -45,7 +45,7 @@ IPD_DATASET_ROOT_DIR = "/ipd" # keep in sync with run_container.sh
 DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-4.2.1-linux-x64"
 DEFAULT_OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"
 DEFAULT_OBJECT_MESH_DIR = "/mnt/061A31701A315E3D/ipd-dataset/bpc_baseline/datasets/models"
-DO_RENDER_INFERENCE_OUTPUT = False
+DO_RENDER_INFERENCE_OUTPUT = True
 
 #overwrite the value above for now... #TODO FIX THIS
 IPD_DATASET_ROOT_DIR = "/mnt/061A31701A315E3D/ipd-dataset/bpc_baseline/datasets"
@@ -220,7 +220,7 @@ if __name__=='__main__':
                         
                 if DO_RENDER_INFERENCE_OUTPUT:
                     start_time = time.time()
-                    ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
+                    ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False, only_image=True)
                     ism_save_output_time = time.time() - start_time
                     logging.info(f"ISM.save_output time: {ism_save_output_time} seconds")
                     rendering_time += ism_save_output_time

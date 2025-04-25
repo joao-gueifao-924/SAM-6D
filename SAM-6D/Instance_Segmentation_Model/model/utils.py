@@ -82,7 +82,7 @@ class Detections:
     A structure for storing detections.
     """
 
-    def __init__(self, data) -> None:
+    def __init__(self, data, keep_numpy_type=False) -> None:
         if isinstance(data, str):
             data = self.load_from_file(data)
         for key, value in data.items():
@@ -95,7 +95,7 @@ class Detections:
         if "keys" in self.keys:
             self.keys.remove("keys")
 
-        if "boxes" in self.keys:
+        if "boxes" in self.keys and not keep_numpy_type:
             if isinstance(self.boxes, np.ndarray):
                 self.to_torch()
             self.boxes = self.boxes.long()
@@ -158,7 +158,7 @@ class Detections:
             for key in self.keys:
                 numpy_versions[key] = getattr(self, key).cpu().numpy()
             
-            return Detections(numpy_versions)
+            return Detections(numpy_versions, keep_numpy_type=True)
 
     def to_torch(self):
         for key in self.keys:

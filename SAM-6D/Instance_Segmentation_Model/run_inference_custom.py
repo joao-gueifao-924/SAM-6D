@@ -61,50 +61,7 @@ inv_rgb_transform = T.Compose(
         ]
     )
 
-def visualize(rgb, detections, only_best_detection=True, save_path="tmp.png"):
-    img = rgb.copy()
-    gray = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2GRAY)
-    img = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-    colors = distinctipy.get_colors(len(detections))
-    alpha = 0.33
-
-    if only_best_detection:
-        best_score = 0.
-        for mask_idx, det in enumerate(detections):
-            if best_score < det['score']:
-                best_score = det['score']
-                best_det = detections[mask_idx]
-        detections = [best_det]
-
-    for mask_idx, det in enumerate(detections):
-        mask = rle_to_mask(det["segmentation"])
-        edge = canny(mask)
-        edge = binary_dilation(edge, np.ones((2, 2)))
-        obj_id = det["category_id"]
-        temp_id = obj_id - 1
-
-        r = int(255*colors[temp_id][0])
-        g = int(255*colors[temp_id][1])
-        b = int(255*colors[temp_id][2])
-        img[mask, 0] = alpha*r + (1 - alpha)*img[mask, 0]
-        img[mask, 1] = alpha*g + (1 - alpha)*img[mask, 1]
-        img[mask, 2] = alpha*b + (1 - alpha)*img[mask, 2]   
-        img[edge, :] = 255
-        best_score < det['score']
-        
-    
-    img = Image.fromarray(np.uint8(img))
-    img.save(save_path)
-    prediction = Image.open(save_path)
-    
-    # concat side by side in PIL
-    img = np.array(img)
-    concat = Image.new('RGB', (img.shape[1] + prediction.size[0], img.shape[0]))
-    concat.paste(rgb, (0, 0))
-    concat.paste(prediction, (img.shape[1], 0))
-    return concat
-
-def visualize_with_score(rgb: Image.Image, detections, only_best_detection=True, save_path="tmp.png"):
+def visualize_with_score(rgb: Image.Image, detections: Detections, only_best_detection=True, save_path="tmp.png"):
     """
     Visualizes segmentations on an image, highlighting masks and rendering scores.
 
@@ -138,7 +95,7 @@ def visualize_with_score(rgb: Image.Image, detections, only_best_detection=True,
         return concat
 
     if only_best_detection:
-        best_det = max(detections, key=lambda det: det['score'])
+        best_det = max(detections, key=lambda det: det['scores'])
         detections = [best_det]
 
     # Use fallback color generator if distinctipy is unavailable or causes issues
@@ -149,20 +106,20 @@ def visualize_with_score(rgb: Image.Image, detections, only_best_detection=True,
     # 4. Prepare for drawing text
     # We'll store text details and draw them *after* all masks/edges are applied
     text_to_draw = []
-    font_size = 18 # Adjust as needed
+    font_size = 10 # Adjust as needed
     try:
         # Attempt to load a commonly available TrueType font
-        font = ImageFont.truetype("arial.ttf", font_size)
+        font = ImageFont.truetype("DejaVuSans.ttf", font_size)
     except IOError:
-        # Fallback to default bitmap font if arial.ttf is not found
+        # Fallback to default bitmap font if DejaVuSans.ttf is not found
         font = ImageFont.load_default()
         font_size = 10 # Default font size is usually smaller
-        print("Arial font not found, using default PIL font.")
+        print("DejaVuSans font not found, using default PIL font.")
 
     # 5. Process each detection: apply mask, edge, store text info
     for mask_idx, det in enumerate(detections):
         # Decode mask - ensuring it has the correct dimensions
-        mask = rle_to_mask(det.get("segmentation")) # Use .get for safety
+        mask = det["masks"].astype(bool)
 
         # Calculate edge (needs boolean mask)
         edge = canny(mask)
@@ -185,7 +142,7 @@ def visualize_with_score(rgb: Image.Image, detections, only_best_detection=True,
         img_np[edge, :] = 255
 
         # --- Store Text Information ---
-        score = det['score']
+        score = det['scores'].item()
         text = f"Score: {score:.2f}"
 
         # Find a position for the text (e.g., top-left corner of mask bounding box)
@@ -343,13 +300,14 @@ def run_inference(  model,
     return detections
 
 
-def save_output(output_dir, rgb_image, detections, only_best_detection=True):
+def save_output(output_dir, rgb_image, detections, only_best_detection=True, only_image=False):
     detections = detections.to_numpy(inplace=False)
     save_path = f"{output_dir}/sam6d_results/detection_ism"
     os.makedirs(save_path, exist_ok=True)
-    detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
-    detections = convert_npz_to_json(idx=0, list_npz_paths=[save_path+".npz"])
-    save_json_bop23(save_path+".json", detections)
+    if not only_image:
+        detections.save_to_file(0, 0, 0, save_path, "Custom", return_results=False)
+        detections = convert_npz_to_json(idx=0, list_npz_paths=[save_path+".npz"])
+        save_json_bop23(save_path+".json", detections)
     vis_img = visualize_with_score(Image.fromarray(rgb_image).convert("RGB"), detections, only_best_detection, f"{output_dir}/sam6d_results/vis_ism.png")
     vis_img.save(f"{output_dir}/sam6d_results/vis_ism.png")
 
@@ -509,7 +467,7 @@ def load_and_run_inference(segmentor_model, output_dir, cad_path, rgb_path, dept
         min_detection_final_score=0.0
     )
 
-    save_output(output_dir, rgb_image, obj_class_detections, only_best_detection=True)
+    save_output(output_dir, rgb_image, obj_class_detections, only_best_detection=True, only_image=False)
 
 
 if __name__ == "__main__":
