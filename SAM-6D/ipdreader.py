@@ -11,7 +11,10 @@ import cv2
 class IpdReader:
     def __init__(self, root_folder="/ipd", shorter_side=None):
       self.root_folder = root_folder
-      self.train_folder = f"{root_folder}/train_pbr"
+      # This is ugly, but I am rushing....
+      self.train_folder = f"{root_folder}/val"
+      #self.test_folder = f"{root_folder}/test"
+      #self.val_folder = f"{root_folder}/val"
       self.mesh_folder = f"{root_folder}/models"
       self.scene_camera = {}
       self.scene_gt = {}
@@ -104,14 +107,20 @@ class IpdReader:
                     obj_data["cam_t_m2c"] = np.array(obj_data["cam_t_m2c"]).reshape(3, 1)
         return scene_data
 
-    def _get_filepath(self, group: int, scene: int, camera: int, img_type: str, object_instance_id: int = None) -> str:
+    def _get_filepath(self, group: int, scene: int, camera: int | str, img_type: str, object_instance_id: int = None) -> str:
       """Helper to construct image file paths following the dataset structure."""
-      path = f"{self.train_folder}/{group:06d}/{img_type}_cam{camera}/{scene:06d}"
+
+      if type(camera) is int:
+        path = f"{self.train_folder}/{group:06d}/{img_type}_cam{camera}/{scene:06d}"
+      else:
+        path = f"{self.train_folder}/{group:06d}/{img_type}_{camera}/{scene:06d}" # for Photoneo camera
 
       if object_instance_id is not None:
         path += f"_{object_instance_id:06d}.png"
       else:
-        path += ".jpg" if img_type == "rgb" else ".png"
+        # This is ugly, but I am rushing.
+        # It happens that the RGB images in the train dataset are JPG while they are PNG in the val and test datasets...
+        path += ".png" if img_type == "rgb" else ".png"
       return path
     
     def get_rgb_image(self, group: int, scene: int, camera: int) -> np.array:
@@ -143,6 +152,22 @@ class IpdReader:
     def get_dolp_image(self, group: int, scene: int, camera: int) -> np.array:
         """Returns Degree of Linear Polarization image."""
         filepath = self._get_filepath(group, scene, camera, "dolp")
+        img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
+        if self.downscale != 1:
+            img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_LINEAR)
+        return img
+    
+    def get_depth_photoneo_image(self, group: int, scene: int, camera: int) -> np.array:
+        """Returns Photoneo Depth image"""
+        filepath = self._get_filepath(group, scene, "photoneo", "depth")
+        img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
+        if self.downscale != 1:
+            img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_LINEAR)
+        return img
+    
+    def get_rgb_photoneo_image(self, group: int, scene: int, camera: int) -> np.array:
+        """Returns Photoneo Depth image"""
+        filepath = self._get_filepath(group, scene, "photoneo", "rgb")
         img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
         if self.downscale != 1:
             img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_LINEAR)
