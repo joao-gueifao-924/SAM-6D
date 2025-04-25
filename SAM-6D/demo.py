@@ -162,8 +162,8 @@ if __name__=='__main__':
         
         for scene_id in reader.enumerate_scenes(group_id):
             total_known_objs_present = len(reader.enumerate_objects(group_id, scene_id, camera_id).items())
-            if total_known_objs_present < 3:
-                continue
+            # if total_known_objs_present < 3:
+            #     continue
             logging.info(f"A total of {total_known_objs_present} known object classes are present in group {group_id}, scene {scene_id}, cam {camera_id}")
             
             logging.info(f"Start of scene: {scene_id}")
