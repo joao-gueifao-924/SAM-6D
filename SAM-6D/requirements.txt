@@ -40,3 +40,4 @@ trimesh==4.4.1
 gpustat==1.0.0
 imgaug==0.4.0
 einops==0.8.1
+triton==2.3.1

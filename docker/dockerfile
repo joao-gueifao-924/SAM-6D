@@ -62,7 +62,7 @@ RUN --mount=type=cache,target=/var/cache/apt/archives \
 # Note: torch and torchvision need to be installed outside requirements.txt file, because we need to specify the --index-url in order to specify CUDA version.
 # requirements.txt file grammar does not support --index-url for specific packages, only for entire file as a whole.
 #RUN pip install torch torchvision xformers --index-url https://download.pytorch.org/whl/cu126
-RUN pip install torch==2.3.1 torchvision==0.18.1 xformers --index-url https://download.pytorch.org/whl/cu121
+RUN pip install torch==2.3.1 torchvision==0.18.1 xformers==0.0.27 --index-url https://download.pytorch.org/whl/cu121
 
 # Copy the requirements file into the container
 # Assumes requirements.txt is in the same directory as the Dockerfile during build
