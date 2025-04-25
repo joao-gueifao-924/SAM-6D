@@ -45,7 +45,7 @@ IPD_DATASET_ROOT_DIR = "/ipd" # keep in sync with run_container.sh
 DEFAULT_BLENDER_PATH = "/home/joao/Downloads/blender-4.2.1-linux-x64"
 DEFAULT_OUTPUT_DIR = "/home/joao/Downloads/algorithm_output"
 DEFAULT_OBJECT_MESH_DIR = "/mnt/061A31701A315E3D/ipd-dataset/bpc_baseline/datasets/models"
-
+DO_RENDER_INFERENCE_OUTPUT = False
 
 #overwrite the value above for now... #TODO FIX THIS
 IPD_DATASET_ROOT_DIR = "/mnt/061A31701A315E3D/ipd-dataset/bpc_baseline/datasets"
@@ -218,7 +218,7 @@ if __name__=='__main__':
                 logging.info(f"ISM.run_inference time: {time.time() - start_time} seconds")
 
                         
-                if False and obj_class_id_path is not None and len(obj_class_id_path) > 0:
+                if DO_RENDER_INFERENCE_OUTPUT:
                     start_time = time.time()
                     ISM.save_output(obj_class_id_path, color, obj_class_detections, only_best_detection=False)
                     ism_save_output_time = time.time() - start_time
@@ -252,7 +252,7 @@ if __name__=='__main__':
                 pred_trans *= 1000.0 # convert from meters back to millimeters
                 logging.info(f"infer_pose time: {time.time() - start_time} seconds")
 
-                if False:
+                if DO_RENDER_INFERENCE_OUTPUT:
                     start_time = time.time()
                     pem.render_predictions( color, model_points, input_data, pose_scores, pred_rot, pred_trans, 
                                             os.path.join(obj_class_id_path, "vis_pem.png"),
