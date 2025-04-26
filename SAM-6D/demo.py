@@ -131,15 +131,10 @@ if __name__=='__main__':
     pem = PEM.PoseEstimatorModel(args)
     os.chdir(original_cwd)
 
-    if LOW_GPU_MEMORY_MODE:
-        ISM.load_descriptormodel_to_gpu(segmentator_model)
-        pem.unload_model_to_cpu()
-        gc.collect()
-        torch.cuda.empty_cache()
-
-    # Object preparation stage. Render templates and infer descriptors out of them.
+    # Object preparation stage. Render templates and infer descriptors out of them. Save those descriptors for posterior use.
     template_descriptors = {}
     for object_class_id in reader.enumerate_object_class_ids():
+        template_descriptors[object_class_id] = {}
         start_time = time.time()
         mesh = reader.get_object_mesh(object_class_id)
         runtime_utils.render_object_templates(object_class_id, OBJECT_MESH_DIR, render_dir, TEMPLATE_OUTPUT_ROOT_DIR, BLENDER_PATH)
@@ -149,10 +144,25 @@ if __name__=='__main__':
         descriptors, appe_descriptors = ISM.init_templates(
             runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), 
             segmentator_model, device)
-        template_descriptors[object_class_id] = {}
+        
         template_descriptors[object_class_id]["descriptors"] = descriptors
         template_descriptors[object_class_id]["appe_descriptors"] = appe_descriptors
         logging.info(f"infer descriptors from from templates time: {time.time() - start_time} seconds")
+
+        start_time = time.time()
+        all_tem_pts, all_tem_feat = pem.get_templates(
+            os.path.join(runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
+        )
+        template_descriptors[object_class_id]["all_tem_pts"] = all_tem_pts
+        template_descriptors[object_class_id]["all_tem_feat"] = all_tem_feat
+        logging.info(f"get_templates time: {time.time() - start_time} seconds")
+
+
+    if LOW_GPU_MEMORY_MODE:
+        ISM.load_descriptormodel_to_gpu(segmentator_model)
+        pem.unload_model_to_cpu()
+        gc.collect()
+        torch.cuda.empty_cache()
 
 
     # Iterate over the images and their object appearances in the dataset.
@@ -235,20 +245,17 @@ if __name__=='__main__':
                 
                 # 2nd stage
                 # Now that we have the 2D object detections, let's run pose inference on each detection.
-                
-                start_time = time.time()
-                all_tem_pts, all_tem_feat = pem.get_templates(
-                    os.path.join(runtime_utils.get_obj_template_dir(object_class_id, TEMPLATE_OUTPUT_ROOT_DIR), "templates")
-                )
-                logging.info(f"get_templates time: {time.time() - start_time} seconds")
 
                 start_time = time.time()
                 model_points = pem.sample_points_from_mesh(mesh)
-                input_data, detections = pem.prepare_test_data(obj_class_detections, color, depth, whole_pts, K, model_points)
+                input_data, _ = pem.prepare_test_data(obj_class_detections, color, depth, whole_pts, K, model_points)
                 logging.info(f"sample_points_from_mesh and prepare_test_data time: {time.time() - start_time} seconds")
 
                 start_time = time.time()
-                pose_scores, pred_rot, pred_trans = pem.infer_pose(all_tem_pts, all_tem_feat, input_data)
+                pose_scores, pred_rot, pred_trans = pem.infer_pose(
+                    template_descriptors[object_class_id]["all_tem_pts"], 
+                    template_descriptors[object_class_id]["all_tem_feat"], 
+                    input_data)
                 pred_trans *= 1000.0 # convert from meters back to millimeters
                 logging.info(f"infer_pose time: {time.time() - start_time} seconds")
 
